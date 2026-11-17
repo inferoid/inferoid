@@ -111,7 +111,7 @@ def test_setup_notes_and_coding(tmp_path, monkeypatch):
     text = "\n".join(lines)
     assert rc == 0 and called == [1]
     assert "run one at a time" in text and "Music is coming soon" in text
-    assert "Inferoid Notes installed" in text and "Which coding agent" in text
+    assert "Inferoid app installed" in text and "Which coding agent" in text
 
 
 def test_models_status_and_unload(tmp_path, monkeypatch):

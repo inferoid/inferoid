@@ -1,4 +1,4 @@
-name: Feedback from Inferoid Notes
+name: Feedback from the Inferoid app
 description: Something went wrong with the notes or the app. Opened from the app after a meeting.
 title: "Notes feedback: "
 labels: ["notes-feedback"]

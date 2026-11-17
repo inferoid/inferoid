@@ -1,7 +1,7 @@
 """`inferoid models`: what is installed, what is loaded right now, and how much of the GPU memory budget it uses.
 
 On a Mac every loaded model shares one GPU memory budget (about two thirds of RAM by default), so two large models at
-once can crash the one that loads second. The Inferoid Notes app starts its model only when needed and unloads Ollama
+once can crash the one that loads second. The Inferoid app starts its model only when needed and unloads Ollama
 models first; `inferoid models unload` does the same by hand.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ def status(memory: dict[str, float] | None = None, get: Callable[[str], Any] = _
     cfg = notes.installed()
     lines.append("\nInstalled:")
     if cfg:
-        lines.append(f"  {cfg['model']:<44} notes + private brain (Inferoid Notes app)")
+        lines.append(f"  {cfg['model']:<44} notes + private brain (Inferoid app)")
     for name, gb in sorted(installed.items()):
         lines.append(f"  {name:<44} {gb:5.1f} GB  (Ollama)")
     if not cfg and not installed:

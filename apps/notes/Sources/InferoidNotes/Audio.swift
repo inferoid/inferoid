@@ -77,7 +77,7 @@ final class SystemAudioCapture {
         description.uuid = UUID()
         description.muteBehavior = .unmuted
         description.isPrivate = true
-        description.name = "Inferoid Notes"
+        description.name = "Inferoid"
         var status = AudioHardwareCreateProcessTap(description, &tapID)
         guard status == noErr else { throw CaptureError.coreAudio("create tap", status) }
 
@@ -93,7 +93,7 @@ final class SystemAudioCapture {
 
         let outputUID = try Self.defaultOutputUID()
         let aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Inferoid Notes Tap",
+            kAudioAggregateDeviceNameKey: "Inferoid Tap",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,

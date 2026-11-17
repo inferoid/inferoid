@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds "Inferoid Notes.app" (release) and signs it ad hoc for running on this Mac.
+# Builds "Inferoid.app" (release) and signs it ad hoc for running on this Mac.
 set -euo pipefail
 cd "$(dirname "$0")"
 swift build -c release 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" | grep -v "^.*Compiling" || true
 BIN=$(swift build -c release --show-bin-path)
-APP="build/Inferoid Notes.app"
+APP="build/Inferoid.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/InferoidNotes" "$APP/Contents/MacOS/"
 find "$BIN" -maxdepth 1 -name "*.bundle" -exec cp -R {} "$APP/Contents/Resources/" \;

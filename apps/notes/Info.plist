@@ -3,16 +3,16 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>ai.inferoid.notes</string>
-  <key>CFBundleName</key><string>Inferoid Notes</string>
-  <key>CFBundleDisplayName</key><string>Inferoid Notes</string>
+  <key>CFBundleName</key><string>Inferoid</string>
+  <key>CFBundleDisplayName</key><string>Inferoid</string>
   <key>CFBundleExecutable</key><string>InferoidNotes</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.5.0</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.6.0</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>LSMinimumSystemVersion</key><string>14.4</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>Inferoid Notes transcribes your side of the meeting on this Mac. Audio never leaves the Mac.</string>
-  <key>NSAudioCaptureUsageDescription</key><string>Inferoid Notes transcribes the other side of your call on this Mac. Audio never leaves the Mac.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Inferoid transcribes your side of the meeting on this Mac. Audio never leaves the Mac.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Inferoid transcribes the other side of your call on this Mac. Audio never leaves the Mac.</string>
 </dict>
 </plist>

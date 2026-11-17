@@ -1,5 +1,5 @@
 name: notes-app
-# Builds the Inferoid Notes Mac app on a GitHub Mac, so nobody needs Xcode. Tag notes-v* to publish a release.
+# Builds the Inferoid Mac app on a GitHub Mac, so nobody needs Xcode. Tag notes-v* to publish a release.
 on:
   push:
     branches: [main]
@@ -22,7 +22,7 @@ jobs:
       - name: Zip
         run: |
           cd apps/notes/build
-          ditto -c -k --keepParent "Inferoid Notes.app" InferoidNotes.zip
+          ditto -c -k --keepParent "Inferoid.app" InferoidNotes.zip
           shasum -a 256 InferoidNotes.zip | tee InferoidNotes.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
@@ -33,4 +33,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" apps/notes/build/InferoidNotes.zip apps/notes/build/InferoidNotes.zip.sha256 --title "Inferoid Notes ${GITHUB_REF_NAME#notes-v}" --notes "Mac app for meeting notes + private brain. Install with: inferoid add notes"
+          gh release create "$GITHUB_REF_NAME" apps/notes/build/InferoidNotes.zip apps/notes/build/InferoidNotes.zip.sha256 --title "Inferoid ${GITHUB_REF_NAME#notes-v}" --notes "Inferoid for Mac: meeting notes and a private brain across your meetings. Install with: inferoid add notes"

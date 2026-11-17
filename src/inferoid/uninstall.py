@@ -12,7 +12,7 @@ from .setup import LAUNCHER, NEXT_LAUNCHER
 
 def run(yes: bool = False, out: Callable[[str], None] = print, ask: Callable[[str], str] = input,
         bin_dir: Path | None = None) -> int:
-    if not yes and not ask("Remove Inferoid Notes, its model, the Claude Code hooks and inferoid's settings? (y/n) ").lower().startswith("y"):
+    if not yes and not ask("Remove the Inferoid app, its notes model, the Claude Code hooks and inferoid's settings? (y/n) ").lower().startswith("y"):
         out("Nothing removed.")
         return 1
     notes.uninstall(out)
