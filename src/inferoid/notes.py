@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 APP_ZIP = "InferoidNotes.zip"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 # Default downloads: the app from this repo's GitHub release, the model from Hugging Face (pinned revision).
 APP_BASE = f"https://github.com/inferoid/inferoid/releases/download/notes-v{APP_VERSION}"
 HF_REPOS = {  # model -> (Hugging Face repo, pinned revision)
