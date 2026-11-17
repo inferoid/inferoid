@@ -1,0 +1,6 @@
+[
+  {"id":"follow-up-in","type":"http in","z":"follow-up","name":"Notes input","url":"/inferoid/follow-up","method":"post","upload":false,"swaggerDoc":"","x":130,"y":100,"wires":[["draft"]]},
+  {"id":"draft","type":"function","z":"follow-up","name":"Draft locally; wait for approval","func":"msg.payload = { status: 'awaiting-human-approval', draft: 'Follow-up draft\\n\\n' + (msg.payload.notes || ''), auto_send: false };\nreturn msg;","outputs":1,"timeout":0,"noerr":0,"initialize":"","finalize":"","libs":[],"x":380,"y":100,"wires":[["approval"]]},
+  {"id":"approval","type":"http response","z":"follow-up","name":"Approval required","statusCode":"202","headers":{},"x":650,"y":100,"wires":[]},
+  {"id":"follow-up","type":"tab","label":"Notes → follow-up draft","disabled":false,"info":"This starter flow creates a draft only. It never sends email automatically."}
+]

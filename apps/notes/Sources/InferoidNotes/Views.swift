@@ -3,19 +3,24 @@ import SwiftUI
 
 /// What the main window shows: home (all meetings), chat across meetings, the meeting in progress, or a saved meeting.
 enum Pane: Hashable {
-    case home, chat, live
+    case home, chat, selfHost, workflows, live
     case meeting(String)
 }
 
 struct MainView: View {
     @EnvironmentObject var rec: Recorder
     @State private var pane: Pane? = .home
+    @State private var businessEnabled = BusinessActivation.cached?.workflowsEnabled ?? false
 
     var body: some View {
         NavigationSplitView {
             List(selection: $pane) {
                 Label("Home", systemImage: "house").tag(Pane.home)
                 Label("Chat", systemImage: "bubble.left.and.bubble.right").tag(Pane.chat)
+                Label("Self Host", systemImage: "lock.shield").tag(Pane.selfHost)
+                if businessEnabled {
+                    Label("Workflows", systemImage: "point.3.connected.trianglepath.dotted").tag(Pane.workflows)
+                }
                 if rec.isRecording || rec.isWriting || !rec.lines.isEmpty {
                     Section("Now") {
                         Label(liveLabel, systemImage: rec.isRecording ? "record.circle" : "waveform")
@@ -50,6 +55,8 @@ struct MainView: View {
             switch pane ?? .home {
             case .home: HomeView(pane: $pane)
             case .chat: AskView(open: { pane = .meeting($0.id) })
+            case .selfHost: BusinessView()
+            case .workflows: WorkflowsView()
             case .live: LiveMeetingView()
             case .meeting(let id):
                 if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { HomeView(pane: $pane) }
@@ -73,6 +80,9 @@ struct MainView: View {
         .frame(minWidth: 780, minHeight: 540)
         .onAppear { rec.reloadMeetings() }
         .onChange(of: rec.isRecording) { _, on in if on { pane = .live } }
+        .onReceive(NotificationCenter.default.publisher(for: .businessEntitlementChanged)) { _ in
+            businessEnabled = BusinessActivation.cached?.workflowsEnabled ?? false
+        }
     }
 
     private var liveLabel: String {

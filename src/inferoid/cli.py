@@ -112,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
     nt = commands.add_parser("notes", help="Inferoid app: meeting notes + private brain on this Mac")
     nt.add_subparsers(dest="notes_command", required=True).add_parser("install", help="Install the app and the notes model that fits this Mac")
     commands.add_parser("jobs", help="What Inferoid can do on this machine (notes, coding, ...)")
+    activate_parser = commands.add_parser("activate", help="Activate a Small Business entitlement on this Mac")
+    activate_parser.add_argument("token")
+    commands.add_parser("workflows", help="List the local Node-RED starter workflows")
+    commands.add_parser("install-node-red", help="Install the pinned local Node-RED package")
     ad = commands.add_parser("add", help="Add a job, e.g. inferoid add notes")
     ad.add_argument("job")
     rm = commands.add_parser("remove", help="Remove a job, e.g. inferoid remove notes (saved meetings stay)")
@@ -231,6 +235,39 @@ def main(argv: list[str] | None = None) -> int:
         report(args.tier)
     elif args.command == "export":
         export_json()
+    elif args.command == "activate":
+        from . import business
+
+        try:
+            result = business.activate(args.token)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"Activation failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Activated {result['plan']} with: {', '.join(result.get('features', []))}")
+        print(f"Offline grace period: {result.get('offline_grace_days', business.OFFLINE_GRACE_DAYS)} days")
+    elif args.command == "workflows":
+        from . import business
+
+        entitlement = business.cached_entitlement()
+        if not entitlement or "workflows" not in entitlement.get("features", []):
+            print("Business activation is required for workflows.")
+            return 1
+        for path in business.starter_flows():
+            print(path.stem)
+    elif args.command == "install-node-red":
+        from . import business
+
+        entitlement = business.cached_entitlement()
+        if not entitlement or "workflows" not in entitlement.get("features", []):
+            print("Business activation is required for workflows.", file=sys.stderr)
+            return 1
+        try:
+            print(f"Installing Node-RED {business.NODE_RED_VERSION} in {business.node_red_dir()}")
+            business.install_node_red()
+        except (OSError, RuntimeError) as exc:
+            print(f"Node-RED installation failed: {exc}", file=sys.stderr)
+            return 1
+        print("Node-RED is ready for the local workflow manager.")
     elif args.command == "night":
         night_main(args)
     elif args.command == "claude":

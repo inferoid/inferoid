@@ -19,7 +19,7 @@ inferoid = "inferoid.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-inferoid = ["data/*.json"]
+inferoid = ["data/*.json", "data/flows/*.json"]
 
 [tool.uv]
 # Rebuild when the code changes, not only when pyproject.toml does (otherwise `uv tool install --force .` reuses a stale build).

@@ -31,6 +31,18 @@ Pick it in `inferoid setup`, or run `inferoid add notes`. (`inferoid jobs` lists
 
 Remove it with `inferoid remove notes`, or everything inferoid installed with `inferoid uninstall` (saved meetings stay).
 
+## Small Business self-host pilot
+
+An active Small Business entitlement adds local Node-RED workflows to the Mac app. From the Self Host page in the Inferoid dashboard, create an activation token and enter it in the app or run:
+
+```sh
+inferoid activate TOKEN
+inferoid install-node-red
+inferoid workflows
+```
+
+The token is sent in the activation request body and is not stored in the local entitlement cache or placed in a URL. The cache has a seven-day offline grace period. The pinned Node-RED runtime binds to loopback with `adminAuth`; its starter flows are meeting → local notes and notes → follow-up draft with human approval. The follow-up flow never sends email automatically.
+
 The notes model is our own fine-tune, sized to your Mac:
 
 | Memory | Notes model | Download |

@@ -1,0 +1,7 @@
+[
+  {"id":"meeting-in","type":"http in","z":"meeting-notes","name":"Meeting transcript","url":"/inferoid/meeting","method":"post","upload":false,"swaggerDoc":"","x":140,"y":100,"wires":[["local-notes"]]},
+  {"id":"local-notes","type":"function","z":"meeting-notes","name":"Save local notes","func":"const folder = msg.payload.folder || env.get('INFEROID_NOTES_FOLDER') || '';\nif (!folder) { node.error('Choose a notes folder before running this workflow', msg); return; }\nmsg.filename = folder + '/meeting-' + new Date().toISOString().replace(/[:.]/g, '-') + '.md';\nmsg.payload = '# Meeting\\n\\n' + (msg.payload.notes || msg.payload.transcript || '');\nreturn msg;","outputs":1,"timeout":0,"noerr":0,"initialize":"","finalize":"","libs":[],"x":360,"y":100,"wires":[["local-file"]]},
+  {"id":"local-file","type":"file","z":"meeting-notes","name":"Write Markdown locally","filename":"","filenameType":"msg","appendNewline":false,"createDir":true,"overwriteFile":"true","encoding":"none","x":590,"y":100,"wires":[["meeting-out"]]},
+  {"id":"meeting-out","type":"http response","z":"meeting-notes","name":"Saved","statusCode":"","headers":{},"x":820,"y":100,"wires":[]},
+  {"id":"meeting-notes","type":"tab","label":"Meeting → local notes","disabled":false,"info":"Inference stays in local Ollama; output is written to the selected local folder."}
+]
