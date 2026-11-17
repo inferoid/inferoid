@@ -1,0 +1,36 @@
+name: notes-app
+# Builds the Inferoid Notes Mac app on a GitHub Mac, so nobody needs Xcode. Tag notes-v* to publish a release.
+on:
+  push:
+    branches: [main]
+    tags: ["notes-v*"]
+    paths: ["apps/notes/**", ".github/workflows/notes-app.yml"]
+  pull_request:
+    paths: ["apps/notes/**", ".github/workflows/notes-app.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile (full errors)
+        run: cd apps/notes && swift build -c release
+      - name: Build the app
+        run: apps/notes/build-app.sh
+      - name: Zip
+        run: |
+          cd apps/notes/build
+          ditto -c -k --keepParent "Inferoid Notes.app" InferoidNotes.zip
+          shasum -a 256 InferoidNotes.zip | tee InferoidNotes.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InferoidNotes
+          path: apps/notes/build/InferoidNotes.zip*
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/notes-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" apps/notes/build/InferoidNotes.zip apps/notes/build/InferoidNotes.zip.sha256 --title "Inferoid Notes ${GITHUB_REF_NAME#notes-v}" --notes "Mac app for meeting notes + private brain. Install with: inferoid add notes"

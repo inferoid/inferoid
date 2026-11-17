@@ -1,0 +1,31 @@
+name: Feedback from Inferoid Notes
+description: Something went wrong with the notes or the app. Opened from the app after a meeting.
+title: "Notes feedback: "
+labels: ["notes-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. This issue is public: please don't paste meeting notes, transcripts, names or numbers from your calls.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+  - type: input
+    id: model
+    attributes:
+      label: Notes model
+  - type: input
+    id: meeting_type
+    attributes:
+      label: Meeting type
+  - type: input
+    id: part
+    attributes:
+      label: What went wrong
+      description: The notes (wrong, missing or made-up points), the app (recording, transcript, speakers, crash), or both
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What happened, and what you expected. Describe the problem without quoting the meeting.
