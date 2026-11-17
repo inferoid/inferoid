@@ -4,7 +4,7 @@ import SwiftUI
 struct InferoidNotesApp: App {
     @StateObject private var rec = Recorder.shared
     var body: some Scene {
-        Window("Inferoid Notes", id: "main") {
+        Window("Inferoid", id: "main") {
             MainView().environmentObject(rec)
         }
         .defaultSize(width: 980, height: 680)

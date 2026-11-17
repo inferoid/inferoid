@@ -82,7 +82,7 @@ def claude_main(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=APP_NAME, description="Private local coding-agent usage report")
+    parser = argparse.ArgumentParser(prog=APP_NAME, description="Private AI on your Mac")
     commands = parser.add_subparsers(dest="command", required=True)
     scan_parser = commands.add_parser("scan")
     scan_parser.add_argument("--days", type=int, default=30)
@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     night_cmds.choices["mark"].add_argument("task")
     night_cmds.choices["mark"].add_argument("status", choices=("pending", "done", "review"))
     night_cmds.choices["schedule"].add_argument("--at", default="01:00", help="HH:MM local time")
-    nt = commands.add_parser("notes", help="Inferoid Notes: meeting notes + private brain on this Mac")
+    nt = commands.add_parser("notes", help="Inferoid app: meeting notes + private brain on this Mac")
     nt.add_subparsers(dest="notes_command", required=True).add_parser("install", help="Install the app and the notes model that fits this Mac")
     commands.add_parser("jobs", help="What Inferoid can do on this machine (notes, coding, ...)")
     ad = commands.add_parser("add", help="Add a job, e.g. inferoid add notes")

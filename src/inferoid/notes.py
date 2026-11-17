@@ -1,4 +1,4 @@
-"""Meeting notes + private brain: installs the Inferoid Notes Mac app and the notes model that fits this Mac.
+"""Meeting notes + private brain: installs the Inferoid Mac app and the notes model that fits this Mac.
 
 The app records the call, transcribes it on the Mac, writes the notes with our fine-tuned model, and answers questions
 across all saved meetings (its Ask tab). Nothing leaves the Mac.
@@ -19,14 +19,15 @@ from pathlib import Path
 from typing import Any
 
 APP_ZIP = "InferoidNotes.zip"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 # Default downloads: the app from this repo's GitHub release, the model from Hugging Face (pinned revision).
 APP_BASE = f"https://github.com/inferoid/inferoid/releases/download/notes-v{APP_VERSION}"
 HF_REPOS = {  # model -> (Hugging Face repo, pinned revision)
     "inferoid-notes-e4b": ("Inferoid/inferoid-notes-e4b", "ad96d9b87a0220a7c97b89e2b6d86207c0b4689d"),
     "inferoid-notes-e2b": ("Inferoid/inferoid-notes-e2b", "3b23ac154774fa26d62a104cce168a033cdce475"),
 }
-APP_NAME = "Inferoid Notes.app"
+APP_NAME = "Inferoid.app"
+OLD_APP_NAMES = ["Inferoid Notes.app"]  # before 0.6.0
 PORT = 8090
 # (model, minimum RAM GB, download GB, what to expect). Measured on 23 held-out calls, judged by two independent models.
 MODELS = [
@@ -135,18 +136,18 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
     """Download and install the app and the notes model. Returns 0 on success."""
     run = run or (lambda cmd: subprocess.call(cmd))
     if platform.system() != "Darwin" and not os.environ.get("INFEROID_NOTES_ANY_OS"):
-        out("Inferoid Notes is a Mac app (Apple silicon). Windows and Linux are not supported yet.")
+        out("The Inferoid app is a Mac app (Apple silicon). Windows and Linux are not supported yet.")
         return 1
     choice = pick(memory)
     if not choice:
-        out(f"Inferoid Notes needs at least {MIN_RAM} GB of memory; this machine has {memory.get('ram_gb', 0):.0f} GB.")
+        out(f"The Inferoid app needs at least {MIN_RAM} GB of memory; this machine has {memory.get('ram_gb', 0):.0f} GB.")
         return 1
     model, _, size, why = choice
     src = source(cfg)
     root = home()
     downloads = root / "downloads"
     model_dir = root / model
-    out(f"\nInstalling Inferoid Notes with {model} ({size:.1f} GB): {why}.")
+    out(f"\nInstalling the Inferoid app with {model} ({size:.1f} GB): {why}.")
     try:
         if src:
             sums = _sums(src, downloads, fetcher)
@@ -210,13 +211,15 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         apps = Path.home() / "Applications"
         apps.mkdir(exist_ok=True)
     out(f"  Installing the app in {apps}…")
+    for old in OLD_APP_NAMES:
+        shutil.rmtree(apps / old, ignore_errors=True)
     if run(["ditto", "-x", "-k", str(files[APP_ZIP]), str(apps)]) != 0:
         out("Unzipping the app failed.")
         return 1
 
     config_path().write_text(json.dumps({"model": model, "model_dir": str(model_dir), "python": str(py), "port": PORT,
                                          "app": str(apps / APP_NAME)}, indent=2) + "\n")
-    out(f"\nInferoid Notes is installed ({apps / APP_NAME}).")
+    out(f"\nThe Inferoid app is installed ({apps / APP_NAME}).")
     out("  Open it, click Start meeting, and allow Microphone and System Audio Recording when macOS asks.")
     out("  The notes model starts by itself when a meeting starts and stops after 10 idle minutes.")
     out("  Ask tab: search all your meetings or ask a question; answers cite the meeting.")
@@ -240,10 +243,11 @@ def uninstall(out: Callable[[str], None] = print, run: Callable[[list[str]], int
         pass
     run(["pkill", "-x", "InferoidNotes"])
     for apps in apps_dirs or [Path("/Applications"), Path.home() / "Applications"]:
-        app = apps / APP_NAME
-        if app.exists():
-            shutil.rmtree(app, ignore_errors=True)
-            out(f"  Removed {app}")
+        for name in [APP_NAME, *OLD_APP_NAMES]:
+            app = apps / name
+            if app.exists():
+                shutil.rmtree(app, ignore_errors=True)
+                out(f"  Removed {app}")
     if home().exists():
         shutil.rmtree(home(), ignore_errors=True)
         out(f"  Removed {home()} (notes model, model server, settings)")

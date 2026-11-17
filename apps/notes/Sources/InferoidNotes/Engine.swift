@@ -146,7 +146,7 @@ enum Summarizer {
     }
 
     static func displayName(_ model: String) -> String {
-        if let c = NotesConfig.load(), model == c.appModel { return "Inferoid Notes (\(c.model.replacingOccurrences(of: "inferoid-notes-", with: "").uppercased()))" }
+        if let c = NotesConfig.load(), model == c.appModel { return "Inferoid notes model (\(c.model.replacingOccurrences(of: "inferoid-notes-", with: "").uppercased()))" }
         return model.hasPrefix("mlx:") ? "MLX " + (model.split(separator: "/").last.map(String.init) ?? model) : model
     }
 

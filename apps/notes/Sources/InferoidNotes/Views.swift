@@ -523,7 +523,7 @@ struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button(rec.isRecording ? "Stop meeting" : "Start meeting") { rec.toggle(); openMain() }
-        Button("Open Inferoid Notes") { openMain() }
+        Button("Open Inferoid") { openMain() }
         if let folder = rec.savedFolder {
             Button("Show last notes in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
         }

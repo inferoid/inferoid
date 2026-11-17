@@ -27,7 +27,7 @@ No telemetry. inferoid never reads, stores or forwards your Claude login, and on
 
 ## Meeting notes + private brain (Mac)
 
-Pick it in `inferoid setup`, or run `inferoid add notes`. (`inferoid jobs` lists every job Inferoid can do on this machine: each is a model picked or fine-tuned for one purpose, plus an app only where the job needs one.) It installs **Inferoid Notes**, a menu-bar app that records your calls (your mic as "Me", the call audio as "Them"), transcribes them live and writes the notes on your Mac when you hang up: summary, decisions, action items with owners and dates, open questions. Home lists your meetings by day; **Chat** searches every saved meeting and answers questions from them, citing the meeting. Notes are plain Markdown files in `~/Documents/Inferoid Notes`; nothing leaves the Mac.
+Pick it in `inferoid setup`, or run `inferoid add notes`. (`inferoid jobs` lists every job Inferoid can do on this machine: each is a model picked or fine-tuned for one purpose, plus an app only where the job needs one.) It installs the **Inferoid** Mac app (menu bar). Meeting notes are its first feature: it records your calls (your mic as "Me", the call audio as "Them"), transcribes them live and writes the notes on your Mac when you hang up: summary, decisions, action items with owners and dates, open questions. Home lists your meetings by day; **Chat** searches every saved meeting and answers questions from them, citing the meeting. Notes are plain Markdown files in `~/Documents/Inferoid Notes`; nothing leaves the Mac.
 
 Remove it with `inferoid remove notes`, or everything inferoid installed with `inferoid uninstall` (saved meetings stay).
 

@@ -1,5 +1,5 @@
 """`inferoid setup`: ask what private AI is for, then install what fits this machine: a local coding model connected to
-your coding agent, and/or Inferoid Notes (meeting notes + private brain)."""
+your coding agent, and/or the Inferoid app (meeting notes + private brain)."""
 from __future__ import annotations
 
 import json
@@ -490,7 +490,7 @@ def run(project: Path, answers: dict[str, str] | None = None, out: Callable[[str
     # 6. summary
     out("\nYou're all set.\n")
     if notes_rc is not None:
-        out("  Meeting notes   " + ("Inferoid Notes installed (meeting notes + Ask tab across your meetings)" if notes_rc == 0
+        out("  Meeting notes   " + ("Inferoid app installed (meeting notes + Ask tab across your meetings)" if notes_rc == 0
                                     else "not installed (see above); retry with: inferoid notes install"))
     if cloud_fallback:
         label = "GPT-6 Luna in Codex" if fallback["kind"] == "codex" else "Inkling 2 Small on OpenRouter (free)"
