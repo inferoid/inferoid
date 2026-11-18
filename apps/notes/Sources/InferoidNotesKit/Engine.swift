@@ -67,7 +67,7 @@ enum Template: String, CaseIterable, Identifiable, Codable {
     var guidance: String {
         switch self {
         case .general:
-            return "This is a general meeting."
+            return "This is a general business meeting."
         case .investor:
             return "This is a meeting with an investor. In key_points, capture the investor's questions, concerns, signals of interest, and anything they asked to see next."
         case .customer:
