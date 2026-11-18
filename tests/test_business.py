@@ -56,3 +56,22 @@ def test_node_red_settings_are_loopback_only_and_authenticated(tmp_path, monkeyp
     assert "adminAuth" in text
     assert "credential-secret" in text
     assert "loopback only" in text
+
+
+def test_install_node_red_extracts_hash_after_interactive_prompt(tmp_path, monkeypatch):
+    monkeypatch.setenv("INFEROID_BUSINESS_HOME", str(tmp_path))
+    monkeypatch.setattr(business, "_keychain_secret", lambda service: "admin-password")
+    expected = "$2y$08$" + "." * 53
+    seen = {}
+
+    def run(args, **kwargs):
+        seen["args"] = args
+        return SimpleNamespace(returncode=0, stdout=f"Password: {expected}\n", stderr="")
+
+    written = []
+    monkeypatch.setattr(business, "write_node_red_settings", lambda password_hash: written.append(password_hash))
+    root = business.install_node_red(run=run)
+
+    assert root == tmp_path / "node-red"
+    assert written == [expected]
+    assert seen["args"][-2:] == ["admin", "hash-pw"]

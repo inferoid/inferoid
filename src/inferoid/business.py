@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import stat
@@ -150,7 +151,10 @@ def install_node_red(run: Callable[..., Any] = subprocess.run) -> Path:
         raise RuntimeError("Node.js/npm is required to install the pinned Node-RED runtime")
     admin_password = _keychain_secret("ai.inferoid.node-red.admin")
     hashed = run(["npx", "--yes", f"node-red@{NODE_RED_VERSION}", "admin", "hash-pw"], input=admin_password + "\n", check=False, capture_output=True, text=True)
-    password_hash = next((line.strip() for line in getattr(hashed, "stdout", "").splitlines() if line.strip().startswith("$2")), "")
+    password_hash = next(
+        (match.group(0) for match in re.finditer(r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}", getattr(hashed, "stdout", ""))),
+        "",
+    )
     if getattr(hashed, "returncode", 1) != 0 or not password_hash:
         raise RuntimeError("unable to create Node-RED adminAuth credentials")
     write_node_red_settings(password_hash)
