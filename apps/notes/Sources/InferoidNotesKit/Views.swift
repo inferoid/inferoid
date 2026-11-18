@@ -122,7 +122,7 @@ struct HomeView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.15)))
 
                 if rec.meetings.isEmpty {
-                    Text("Your meetings will appear here. Notes are plain files in ~/Documents/Inferoid Notes.")
+                    Text("Your meetings will appear here. Notes are plain files in ~/Documents/\(InferoidPaths.folderName).")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(groups, id: \.day) { group in

@@ -99,8 +99,7 @@ enum FeedbackSender {
 
     /// Ratings that could not be sent yet (offline, or the server was down). Kept on this Mac until they go out.
     static var outbox: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Inferoid Notes", isDirectory: true)
+        let dir = InferoidPaths.support
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("feedback-outbox.jsonl")
     }
