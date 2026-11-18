@@ -86,14 +86,14 @@ enum Summarizer {
     static let mlx = URL(string: "http://127.0.0.1:8090")!
 
     static let system = """
-    You write meeting notes from a transcript. "Me" is the person who recorded the meeting; "Them" is everyone else on the call.
+    You write meeting notes from a transcript. "Me" is the person who recorded the meeting; "Them" or a calendar attendee name is everyone else on the call.
     Rules:
     - Use only facts stated in the transcript. Never invent names, numbers, dates, or commitments.
     - The transcript comes from speech recognition and may contain misheard words; prefer the most plausible reading.
     - summary: 2-4 sentences on what the meeting was about and where it ended.
     - key_points: the most important specific points, each one sentence.
     - decisions: things both sides agreed on. Empty list if none.
-    - action_items: concrete next steps. owner is "Me", "Them", or a name said in the meeting; use "" if unclear. due is the date or time said in the meeting, or "".
+    - action_items: concrete next steps. owner is "Me", a listed attendee name, "Them", or "" if unclear. Use attendee names exactly as provided when the transcript supports it. due is the date or time said in the meeting, or "".
     - open_questions: questions raised and not answered.
     - title: 3-8 words.
     Return only JSON matching the schema.
@@ -156,13 +156,15 @@ enum Summarizer {
         return String(text[a ... b])
     }
 
-    static func run(transcript: String, template: Template, model: String, context: Int = 32768, instructions: String = "",
+    static func run(transcript: String, template: Template, model: String, context: Int = 32768,
+                    attendeeNames: [String] = [], instructions: String = "",
                     onText: (@Sendable (String) -> Void)? = nil) async throws -> Result {
         var tries = 0
         while true {
             do {
                 return try await stream(transcript: transcript, template: template, model: model, context: context,
-                                        constrained: !model.hasPrefix("mlx:"), maxTokens: nil, instructions: instructions, onText: onText)
+                                        attendeeNames: attendeeNames, constrained: !model.hasPrefix("mlx:"), maxTokens: nil,
+                                        instructions: instructions, onText: onText)
             } catch let error as NSError where error.localizedDescription.contains("not valid JSON") && tries < 2 {
                 // The model broke the JSON. Try again (up to 3 in all); the transcript is cached, so this costs only the writing.
                 tries += 1
@@ -170,16 +172,19 @@ enum Summarizer {
             } catch let error as NSError where error.localizedDescription.contains("structured output") {
                 // Some Ollama builds lack the grammar library for some engines; ask for the same JSON in the prompt instead.
                 return try await stream(transcript: transcript, template: template, model: model, context: context,
-                                        constrained: false, maxTokens: nil, instructions: instructions, onText: onText)
+                                        attendeeNames: attendeeNames, constrained: false, maxTokens: nil,
+                                        instructions: instructions, onText: onText)
             }
         }
     }
 
     /// Reads the transcript so far without writing notes (1 output token), so the server caches it.
     /// At the end of the meeting only the last minute is still unread.
-    static func prefill(transcript: String, template: Template, model: String, context: Int = 32768, instructions: String = "") async {
+    static func prefill(transcript: String, template: Template, model: String, context: Int = 32768,
+                        attendeeNames: [String] = [], instructions: String = "") async {
         _ = try? await stream(transcript: transcript, template: template, model: model, context: context,
-                              constrained: false, maxTokens: 1, instructions: instructions, onText: nil, prefillOnly: true)
+                              attendeeNames: attendeeNames, constrained: false, maxTokens: 1, instructions: instructions,
+                              onText: nil, prefillOnly: true)
     }
 
     private static func fail(_ message: String, _ code: Int = 1) -> NSError {
@@ -206,12 +211,14 @@ enum Summarizer {
         return m.contains("gemma") || m.contains("e4b") || m.contains("e2b")
     }
 
-    private static func stream(transcript: String, template: Template, model: String, context: Int, constrained: Bool,
+    private static func stream(transcript: String, template: Template, model: String, context: Int,
+                               attendeeNames: [String], constrained: Bool,
                                maxTokens: Int?, instructions: String = "", onText: (@Sendable (String) -> Void)?,
                                prefillOnly: Bool = false) async throws -> Result {
         // The user's instructions go in the same slot as the meeting-type guidance the model was trained with;
         // the output sections never change (the note template only changes how they are shown).
-        let sys = system + "\n" + template.guidance + (instructions.isEmpty ? "" : " " + instructions) + "\n" + schemaHint
+        let attendees = attendeeNames.isEmpty ? "" : "\nAttendees on the calendar event: " + attendeeNames.joined(separator: ", ") + ". Use these names for action-item owners when appropriate."
+        let sys = system + "\n" + template.guidance + attendees + (instructions.isEmpty ? "" : " " + instructions) + "\n" + schemaHint
         let user = "Transcript:\n" + (prefillOnly && model.hasPrefix("mlx:") ? transcript + "\n" : transcript)
         let r = try await send(system: sys, user: user, model: model, context: context, format: constrained ? schema : nil,
                                maxTokens: maxTokens ?? 4000, open: prefillOnly, onText: onText)
@@ -359,9 +366,10 @@ func partialNotes(_ text: String) -> Notes? {
 }
 
 /// The notes as Markdown, laid out by the note template (order, names, hidden sections). The title always comes first.
-func notesMarkdown(_ n: Notes, layout: NoteLayout = .current) -> String {
+func notesMarkdown(_ n: Notes, layout: NoteLayout = .current, attendeeNames: [String] = []) -> String {
     func list(_ xs: [String]) -> String { xs.isEmpty ? "- None\n" : xs.map { "- \($0)\n" }.joined() }
     var md = "# \(n.title)\n"
+    if !attendeeNames.isEmpty { md += "\nAttendees: \(attendeeNames.joined(separator: ", "))\n" }
     for s in layout.visible {
         switch s {
         case .summary:
@@ -388,7 +396,8 @@ enum Store {
     }
 
     @discardableResult
-    static func save(started: Date, lines: [Line], notes: Notes?, meta: [String: Any], to dir: URL? = nil) throws -> URL {
+    static func save(started: Date, lines: [Line], notes: Notes?, meta: [String: Any],
+                     attendeeNames: [String] = [], to dir: URL? = nil) throws -> URL {
         let stamp = DateFormatter()
         stamp.dateFormat = "yyyy-MM-dd HHmm"
         let safeTitle = (notes?.title ?? "Meeting").replacingOccurrences(of: "/", with: "-")
@@ -397,7 +406,7 @@ enum Store {
         try ("# Transcript\n\n" + lines.map { "**[\(clock($0.start))] \($0.speaker):** \($0.text)\n" }.joined(separator: "\n"))
             .write(to: folder.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
         if let notes {
-            try notesMarkdown(notes).write(to: folder.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+            try notesMarkdown(notes, attendeeNames: attendeeNames).write(to: folder.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
             // Every section, whatever the template hides, so the notes can be shown another way later.
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -409,5 +418,19 @@ enum Store {
         try JSONSerialization.data(withJSONObject: m, options: [.prettyPrinted, .sortedKeys])
             .write(to: folder.appendingPathComponent("meta.json"))
         return folder
+    }
+
+    /// Renames one saved transcript label without touching transcript text.
+    @discardableResult
+    static func renameSpeaker(in folder: URL, from oldName: String, to newName: String) throws -> String {
+        let cleanName = String(newName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !cleanName.isEmpty, !cleanName.contains("\n"), !cleanName.contains("\r") else {
+            throw NSError(domain: "Store", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speaker name cannot be empty."])
+        }
+        let url = folder.appendingPathComponent("transcript.md")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let updated = text.replacingOccurrences(of: "] \(oldName):**", with: "] \(cleanName):**")
+        try updated.write(to: url, atomically: true, encoding: .utf8)
+        return updated
     }
 }

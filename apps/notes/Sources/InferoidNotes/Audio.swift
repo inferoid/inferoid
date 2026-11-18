@@ -46,8 +46,13 @@ final class MicCapture {
     private let engine = AVAudioEngine()
     private let resampler = MonoResampler()
 
-    func start(_ onSamples: @escaping ([Float]) -> Void) throws {
+    func start(_ onSamples: @escaping ([Float]) -> Void, voiceProcessingEnabled: Bool = true) throws {
         let input = engine.inputNode
+        if voiceProcessingEnabled {
+            // Voice processing is best-effort: some input devices do not expose it,
+            // but recording should still work when the user leaves the setting on.
+            try? input.setVoiceProcessingEnabled(true)
+        }
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { throw CaptureError.noMicrophone }
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [resampler] buffer, _ in

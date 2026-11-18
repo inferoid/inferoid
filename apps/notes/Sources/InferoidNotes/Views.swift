@@ -322,7 +322,7 @@ struct NotesView: View {
                         }
                         Button("Copy as Markdown") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(notesMarkdown(n), forType: .string)
+                            NSPasteboard.general.setString(notesMarkdown(n, attendeeNames: rec.attendeeNames), forType: .string)
                         }
                     }
                 }
@@ -373,8 +373,12 @@ struct NotesView: View {
 // MARK: - A saved meeting
 
 struct MeetingView: View {
+    @EnvironmentObject var rec: Recorder
     let meeting: Meeting
     @State private var tab = 0
+    @State private var transcriptText = ""
+    @State private var renameSpeaker = ""
+    @State private var isRenaming = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -392,14 +396,43 @@ struct MeetingView: View {
                 Spacer()
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(tab == 0 ? meeting.notes : meeting.transcript, forType: .string)
+                    NSPasteboard.general.setString(tab == 0 ? meeting.notes : transcriptText, forType: .string)
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([meeting.folder]) }
             }
             .padding(.horizontal, 28).padding(.vertical, 12)
             Divider()
+            if tab == 1, transcriptText.contains("] Them:**") {
+                HStack(spacing: 8) {
+                    if isRenaming {
+                        TextField("New speaker name", text: $renameSpeaker)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                        Button("Save") {
+                            let name = renameSpeaker.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { return }
+                            if let updated = try? Store.renameSpeaker(in: meeting.folder, from: "Them", to: name) {
+                                transcriptText = updated
+                                isRenaming = false
+                                rec.reloadMeetings()
+                            }
+                        }
+                        Button("Cancel") { isRenaming = false }
+                    } else {
+                        Button("Rename Them") {
+                            renameSpeaker = ""
+                            isRenaming = true
+                        }
+                        Text("Changes every ‘Them’ label in this saved transcript.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 8)
+            }
             ScrollView {
-                let text = tab == 0 ? meeting.notes : meeting.transcript
+                let text = tab == 0 ? meeting.notes : transcriptText
                 if text.isEmpty {
                     Text(tab == 0 ? "No notes for this meeting; the transcript is saved." : "No transcript.")
                         .foregroundStyle(.secondary).padding(.top, 40).frame(maxWidth: .infinity)
@@ -413,6 +446,7 @@ struct MeetingView: View {
         }
         .navigationTitle(meeting.title)
         .id(meeting.id)
+        .onAppear { transcriptText = meeting.transcript }
     }
 }
 
