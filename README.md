@@ -2,7 +2,7 @@
 
 **Private AI on your Mac.** Meeting notes that write themselves, a private brain you can ask about every past meeting, and local models for coding, each picked to fit your Mac's memory. Nothing leaves your machine.
 
-On 23 held-out synthetic business calls, our 4B notes model made **3.0 mistakes per call; Claude Opus 5.5 made 3.2** ([results and models](https://huggingface.co/Inferoid/inferoid-notes-e4b)).
+On 23 held-out synthetic client calls, our 4B notes model made **3.0 mistakes per call; Claude Opus 5.5 made 3.2** ([results and models](https://huggingface.co/Inferoid/inferoid-notes-e4b)).
 
 ## Get started (Mac, Apple silicon)
 
@@ -35,7 +35,7 @@ The notes model is our own fine-tune, sized to your Mac:
 
 | Memory | Notes model | Download |
 |---|---|---|
-| 16 GB and up | [inferoid-notes-e4b](https://huggingface.co/Inferoid/inferoid-notes-e4b): our best; on 23 held-out synthetic business calls (written transcripts with speech-recognition-style errors) it made 3.0 mistakes per call, the frontier cloud model we compared with made 3.2 | 3.9 GB |
+| 16 GB and up | [inferoid-notes-e4b](https://huggingface.co/Inferoid/inferoid-notes-e4b): our best; on 23 held-out synthetic client calls (written transcripts with speech-recognition-style errors) it made 3.0 mistakes per call, the frontier cloud model we compared with made 3.2 | 3.9 GB |
 | 8 GB | [inferoid-notes-e2b](https://huggingface.co/Inferoid/inferoid-notes-e2b): about twice as fast, about twice the mistakes | 2.5 GB |
 
 The app starts its model only when a meeting or a question needs it, unloads Ollama models first so the two never compete for GPU memory, and stops it after 10 idle minutes. `inferoid models` shows what is installed and loaded and how much of the GPU budget it uses; `inferoid models unload` frees it all.

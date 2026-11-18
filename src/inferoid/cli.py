@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from importlib.metadata import entry_points
 from pathlib import Path
 
 from . import APP_NAME
@@ -28,6 +29,16 @@ def export_json() -> None:
         turns.append(data)
     print(json.dumps({"schema_version": 2, "user": os.environ.get("INFEROID_USER", "local"), "exported_at": now_iso(), "turns": turns}, indent=2, ensure_ascii=False))
     conn.close()
+
+
+def register_external_commands(commands: argparse._SubParsersAction) -> None:
+    """Let installed distributions add commands without changing this package."""
+    try:
+        points = entry_points(group="inferoid.plugins")
+    except TypeError:  # pragma: no cover - compatibility with older metadata APIs
+        points = entry_points().select(group="inferoid.plugins")
+    for point in sorted(points, key=lambda item: item.name):
+        point.load()(commands)
 
 
 def night_main(args: argparse.Namespace) -> None:
@@ -209,6 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     cl_cmds.add_parser("status").add_argument("--project", default=".")
     cl_cmds.add_parser("statusline", help="(run by Claude Code) record usage for the status line")
     cl_cmds.add_parser("hook", help="(run by Claude Code) usage reminder hook").add_argument("event")
+    register_external_commands(commands)
     return parser
 
 
@@ -219,6 +231,9 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     args = build_parser().parse_args(argv)
+    external_handler = getattr(args, "_inferoid_handler", None)
+    if external_handler is not None:
+        return int(external_handler(args) or 0)
     if args.command == "scan":
         print(format_scan(scan(args.days)))
     elif args.command == "machine":

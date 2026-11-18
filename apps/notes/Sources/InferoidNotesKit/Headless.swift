@@ -8,13 +8,13 @@ import Foundation
 ///       notes only, for comparing models on the same transcript.
 ///   InferoidNotes --ask "question" [--model M] [--root DIR]
 ///       private brain: answers from the saved meetings (default ~/Documents/Inferoid Notes).
-enum Headless {
+public enum Headless {
     static func value(_ args: [String], _ flag: String) -> String? {
         guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
         return args[i + 1]
     }
 
-    static func run(_ args: [String]) async throws {
+    public static func run(_ args: [String]) async throws {
         let template = Template(rawValue: value(args, "--template") ?? "general") ?? .general
         let defaultModel = NotesConfig.load()?.appModel ?? "gemma4:e4b"
         if let question = value(args, "--ask") {

@@ -4,10 +4,10 @@ import Network
 import SwiftUI
 
 @MainActor
-final class Recorder: ObservableObject {
-    static let shared = Recorder()
+public final class Recorder: ObservableObject {
+    public static let shared = Recorder()
 
-    @Published var isRecording = false
+    @Published public var isRecording = false
     @Published var isWriting = false
     @Published var status = "Ready"
     @Published var error: String?
@@ -53,7 +53,7 @@ final class Recorder: ObservableObject {
     private var prefilledLines = 0
     private let monitor = NWPathMonitor()
 
-    init() {
+    public init() {
         model = UserDefaults.standard.string(forKey: "model") ?? NotesConfig.load()?.appModel ?? "gemma4:e4b"
         template = Template(rawValue: UserDefaults.standard.string(forKey: "template") ?? "") ?? .general
         monitor.pathUpdateHandler = { path in

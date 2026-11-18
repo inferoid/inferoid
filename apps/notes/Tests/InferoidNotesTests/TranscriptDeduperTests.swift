@@ -1,5 +1,5 @@
 import XCTest
-@testable import InferoidNotes
+@testable import InferoidNotesKit
 
 final class TranscriptDeduperTests: XCTestCase {
     func testRemovesFuzzyEchoPrefixAndKeepsOwnerWords() {
