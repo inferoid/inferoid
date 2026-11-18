@@ -29,6 +29,7 @@ enum TranscriptDeduper {
                 removed.formUnion(matchedMeIndices(meTokens, callTokens))
             }
 
+            guard !removed.isEmpty else { continue }  // nothing echoed: keep the line exactly as transcribed
             let remaining = meTokens.enumerated().compactMap { removed.contains($0.offset) ? nil : $0.element.original }
             result[index].text = remaining.joined(separator: " ")
         }
@@ -50,6 +51,15 @@ enum TranscriptDeduper {
 
     /// Finds the strongest local alignment and returns the positions it matched in the Me line.
     private static func matchedMeIndices(_ me: [Token], _ them: [Token]) -> Set<Int> {
+        // Two-word lines ("Sounds good.") are echo only when the whole line appears word for word in the call audio.
+        if me.count == 2 {
+            let words = me.map(\.normalized), call = them.map(\.normalized)
+            guard call.count >= words.count else { return [] }
+            for start in 0...(call.count - words.count) where Array(call[start..<start + words.count]) == words {
+                return Set(me.indices)
+            }
+            return []
+        }
         guard me.count >= 3, them.count >= 3 else { return [] }
         var cells = Array(repeating: Array(repeating: AlignmentCell(), count: them.count + 1), count: me.count + 1)
         var best = (i: 0, j: 0, cell: AlignmentCell())
