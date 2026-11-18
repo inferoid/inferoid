@@ -1,6 +1,32 @@
 import AppKit
 import Foundation
 
+/// Shared local model choices used by apps built on the Notes kit.
+/// Keeping this catalog in the public kit lets private extensions make the
+/// same hardware recommendation without copying model-fit thresholds.
+public struct InferoidModelOption: Sendable {
+    public let modelID: String
+    public let minimumRAMGB: Int
+    public let downloadGB: Double
+
+    public init(modelID: String, minimumRAMGB: Int, downloadGB: Double) {
+        self.modelID = modelID
+        self.minimumRAMGB = minimumRAMGB
+        self.downloadGB = downloadGB
+    }
+}
+
+public enum InferoidModelCatalog {
+    public static let notes: [InferoidModelOption] = [
+        InferoidModelOption(modelID: "inferoid-notes-e4b", minimumRAMGB: 16, downloadGB: 3.9),
+        InferoidModelOption(modelID: "inferoid-notes-e2b", minimumRAMGB: 8, downloadGB: 2.5),
+    ]
+
+    public static func recommendedNotesModel(ramGB: Int) -> InferoidModelOption? {
+        notes.first { ramGB >= $0.minimumRAMGB }
+    }
+}
+
 /// The notes model that `inferoid setup` installed: ~/inferoid-notes/notes.json
 /// {"model": "inferoid-notes-e4b", "model_dir": "...", "python": ".../venv/bin/python", "port": 8090}
 struct NotesConfig: Decodable {
