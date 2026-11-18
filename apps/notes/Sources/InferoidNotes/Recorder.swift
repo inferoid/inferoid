@@ -14,6 +14,7 @@ final class Recorder: ObservableObject {
     @Published var lines: [Line] = []
     @Published var notes: Notes?
     @Published var notesInfo = ""
+    @Published private(set) var attendeeNames: [String] = []
     @Published var elapsed: TimeInterval = 0
     @Published var levelMe: Float = 0
     @Published var levelThem: Float = 0
@@ -90,16 +91,21 @@ final class Recorder: ObservableObject {
         guard await transcriber.isReady else { return }
         lines = []; notes = nil; notesInfo = ""; savedFolder = nil; feedbackFor = nil; elapsed = 0
         started = Date()
+        let calendarContext = await MeetingCalendar.currentContext(at: started)
+        attendeeNames = calendarContext.attendeeNames
 
         let me = Segmenter { [weak self] samples, start, end in self?.utterance("Me", samples, start, end) }
-        let them = Segmenter { [weak self] samples, start, end in self?.utterance("Them", samples, start, end) }
+        let otherSpeaker = calendarContext.otherParticipant ?? "Them"
+        let them = Segmenter { [weak self] samples, start, end in self?.utterance(otherSpeaker, samples, start, end) }
         segMe = me; segThem = them
 
         var problems: [String] = []
         if await AVCaptureDevice.requestAccess(for: .audio) {
             let capture = MicCapture()
             do {
-                try capture.start { [meQueue] samples in meQueue.async { me.push(samples) } }
+                try capture.start({ [meQueue] samples in
+                    meQueue.async { me.push(samples) }
+                }, voiceProcessingEnabled: Prefs.shared.voiceProcessingEnabled)
                 mic = capture
             } catch { problems.append("Microphone: \(error.localizedDescription)") }
         } else {
@@ -141,6 +147,7 @@ final class Recorder: ObservableObject {
                 let line = Line(speaker: speaker, start: start, end: end, text: text)
                 let index = self.lines.firstIndex { $0.start > start } ?? self.lines.endIndex
                 self.lines.insert(line, at: index)
+                self.lines = TranscriptDeduper.deduplicated(self.lines)
             }
             self.pending.append(task)
         }
@@ -151,7 +158,8 @@ final class Recorder: ObservableObject {
         prefillBusy = true
         let count = lines.count
         do { try await ModelManager.shared.ensure(model) } catch { prefillBusy = false; return }
-        await Summarizer.prefill(transcript: transcriptText(lines), template: template, model: model, instructions: Prefs.instructionsNow)
+        await Summarizer.prefill(transcript: transcriptText(lines), template: template, model: model,
+                                 attendeeNames: attendeeNames, instructions: Prefs.instructionsNow)
         prefilledLines = count
         prefillBusy = false
     }
@@ -180,6 +188,7 @@ final class Recorder: ObservableObject {
         let writeStarted = Date()
         var meta: [String: Any] = ["model": model, "template": template.rawValue,
                                    "duration_s": Int(elapsed), "speech_model": "parakeet-tdt-0.6b-v2"]
+        if !attendeeNames.isEmpty { meta["attendees"] = attendeeNames }
         do {
             if ModelManager.shared.manages(model) { status = "Loading the notes model…" }
             try await ModelManager.shared.ensure(model)
@@ -188,7 +197,7 @@ final class Recorder: ObservableObject {
             let instructions = Prefs.instructionsNow
             if !instructions.isEmpty { meta["instructions"] = instructions }
             let result = try await Summarizer.run(transcript: transcriptText(lines), template: template, model: model,
-                                                  instructions: instructions) { text in
+                                                  attendeeNames: attendeeNames, instructions: instructions) { text in
                 Task { @MainActor in
                     let r = Recorder.shared
                     guard r.isWriting, Date().timeIntervalSince(lastShown.date) > 0.15, let partial = partialNotes(text) else { return }
@@ -207,7 +216,7 @@ final class Recorder: ObservableObject {
             self.error = "Notes: \(error.localizedDescription)"
             status = "Transcript saved; notes failed"
         }
-        savedFolder = try? Store.save(started: started, lines: lines, notes: notes, meta: meta)
+        savedFolder = try? Store.save(started: started, lines: lines, notes: notes, meta: meta, attendeeNames: attendeeNames)
         if notes != nil, Prefs.shared.askFeedback { feedbackFor = savedFolder }
         reloadMeetings()
         ModelManager.shared.idle()

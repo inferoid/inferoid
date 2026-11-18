@@ -64,6 +64,9 @@ final class Prefs: ObservableObject {
     @Published var askFeedback = UserDefaults.standard.object(forKey: "askFeedback") as? Bool ?? true {
         didSet { UserDefaults.standard.set(askFeedback, forKey: "askFeedback") }
     }
+    @Published var voiceProcessingEnabled = UserDefaults.standard.object(forKey: "voiceProcessingEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(voiceProcessingEnabled, forKey: "voiceProcessingEnabled") }
+    }
 
     /// Instructions as sent to the model: one line, trimmed, capped.
     nonisolated static var instructionsNow: String {
@@ -246,9 +249,26 @@ struct SettingsView: View {
         TabView {
             InstructionsSettings().tabItem { Label("Instructions", systemImage: "text.bubble") }
             TemplateSettings().tabItem { Label("Note template", systemImage: "list.bullet.rectangle") }
+            AudioSettings().tabItem { Label("Audio", systemImage: "waveform") }
             FeedbackSettings().tabItem { Label("Feedback", systemImage: "hand.thumbsup") }
         }
-        .frame(width: 560, height: 440)
+        .frame(width: 560, height: 460)
+    }
+}
+
+struct AudioSettings: View {
+    @ObservedObject var prefs = Prefs.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Suppress call audio in the microphone", isOn: $prefs.voiceProcessingEnabled)
+                .toggleStyle(.checkbox)
+            Text("Uses macOS voice processing (acoustic echo cancellation) so speaker output is less likely to be transcribed as Me. Turn it off if it makes your microphone sound worse.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(20)
     }
 }
 
