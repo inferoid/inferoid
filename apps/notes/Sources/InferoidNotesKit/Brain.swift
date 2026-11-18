@@ -85,6 +85,12 @@ enum Brain {
         return String(m.notes.split(separator: "\n").dropFirst().first(where: { !$0.isEmpty })?.prefix(180) ?? "")
     }
 
+    static let generalSystem = """
+    You are a private assistant that runs entirely on the user's Mac; nothing they type leaves it. \
+    Answer helpfully and briefly. None of the user's saved meetings matched this question, so answer \
+    from general knowledge and never invent meeting details. If the question needs their own records, say so.
+    """
+
     static let askSystem = """
     You answer questions about the user's past meetings, using only the meeting notes and transcript lines below.
     "Me" is the user. Cite the meeting for every fact, like [Title, 2026-11-14]. If the meetings below do not answer the
@@ -113,7 +119,9 @@ enum Brain {
                     onText: (@Sendable (String) -> Void)? = nil) async throws -> (answer: String, sources: [Hit]) {
         let hits = Array(search(question, in: meetings, limit: 5))
         guard !hits.isEmpty else {
-            return (meetings.isEmpty ? "No saved meetings yet." : "None of your saved meetings mention that.", [])
+            // No meeting matches: answer the question itself instead of a dead end. Still fully local.
+            let answer = try await Summarizer.complete(system: generalSystem, user: question, model: model, onText: onText)
+            return (answer.trimmingCharacters(in: .whitespacesAndNewlines), [])
         }
         let user = "Meetings:\n\n" + context(for: question, hits: hits) + "\nQuestion: " + question
         let answer = try await Summarizer.complete(system: askSystem, user: user, model: model, onText: onText)

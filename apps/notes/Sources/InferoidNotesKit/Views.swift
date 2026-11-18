@@ -122,7 +122,7 @@ struct HomeView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.15)))
 
                 if rec.meetings.isEmpty {
-                    Text("Your meetings will appear here. Notes are plain files in ~/Documents/Inferoid Notes.")
+                    Text("Your meetings will appear here. Notes are plain files in ~/Documents/\(InferoidPaths.folderName).")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(groups, id: \.day) { group in
@@ -504,9 +504,9 @@ struct AskView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Ask your meetings").font(.title2.bold())
+            Text("Chat").font(.title2.bold())
             HStack {
-                TextField("Search your meetings, or ask a question", text: $rec.askQuery)
+                TextField("Ask anything, or ask about your meetings", text: $rec.askQuery)
                     .textFieldStyle(.roundedBorder).controlSize(.large)
                     .onSubmit { rec.ask() }
                 Button("Ask") { rec.ask() }

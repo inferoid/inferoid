@@ -390,10 +390,22 @@ func notesMarkdown(_ n: Notes, layout: NoteLayout = .current, attendeeNames: [St
 
 // MARK: - Storage: plain Markdown files in ~/Documents/Inferoid Notes
 
-enum Store {
-    static var root: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Inferoid Notes")
+/// Where an app built on this kit keeps its data. Another app (for example a business edition) sets
+/// `folderName` once at launch so its meetings and settings never mix with the personal app's.
+public enum InferoidPaths {
+    public static var folderName = "Inferoid Notes"
+    /// ~/Documents/<folderName>: meetings as plain Markdown files.
+    public static var documents: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName)
     }
+    /// ~/Library/Application Support/<folderName>: app state that is not a meeting.
+    public static var support: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName, isDirectory: true)
+    }
+}
+
+enum Store {
+    static var root: URL { InferoidPaths.documents }
 
     @discardableResult
     static func save(started: Date, lines: [Line], notes: Notes?, meta: [String: Any],
