@@ -4,18 +4,25 @@ import SwiftUI
 /// What the main window shows: home (all meetings), chat across meetings, the meeting in progress, or a saved meeting.
 enum Pane: Hashable {
     case home, chat, live
+    case extensionTab(String)
     case meeting(String)
 }
 
-struct MainView: View {
+@MainActor
+public struct MainView: View {
     @EnvironmentObject var rec: Recorder
     @State private var pane: Pane? = .home
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         NavigationSplitView {
             List(selection: $pane) {
                 Label("Home", systemImage: "house").tag(Pane.home)
                 Label("Chat", systemImage: "bubble.left.and.bubble.right").tag(Pane.chat)
+                ForEach(InferoidExtensions.sidebarItems) { item in
+                    Label(item.title, systemImage: item.systemImage).tag(Pane.extensionTab(item.id))
+                }
                 if rec.isRecording || rec.isWriting || !rec.lines.isEmpty {
                     Section("Now") {
                         Label(liveLabel, systemImage: rec.isRecording ? "record.circle" : "waveform")
@@ -51,6 +58,8 @@ struct MainView: View {
             case .home: HomeView(pane: $pane)
             case .chat: AskView(open: { pane = .meeting($0.id) })
             case .live: LiveMeetingView()
+            case .extensionTab(let id):
+                if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }
             case .meeting(let id):
                 if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { HomeView(pane: $pane) }
             }
@@ -552,10 +561,12 @@ struct AskView: View {
     }
 }
 
-struct MenuContent: View {
+public struct MenuContent: View {
     @EnvironmentObject var rec: Recorder
     @Environment(\.openWindow) private var openWindow
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         Button(rec.isRecording ? "Stop meeting" : "Start meeting") { rec.toggle(); openMain() }
         Button("Open Inferoid") { openMain() }
         if let folder = rec.savedFolder {

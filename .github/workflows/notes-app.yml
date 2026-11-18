@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile (full errors)
         run: cd apps/notes && swift build -c release
+      - name: Unit tests
+        run: cd apps/notes && swift test
       - name: Build the app
         run: apps/notes/build-app.sh
       - name: Zip

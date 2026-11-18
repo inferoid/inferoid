@@ -244,8 +244,10 @@ struct FeedbackBar: View {
 
 // MARK: - Settings window (⌘,)
 
-struct SettingsView: View {
-    var body: some View {
+public struct SettingsView: View {
+    public init() {}
+
+    public var body: some View {
         TabView {
             InstructionsSettings().tabItem { Label("Instructions", systemImage: "text.bubble") }
             TemplateSettings().tabItem { Label("Note template", systemImage: "list.bullet.rectangle") }
