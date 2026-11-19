@@ -1,9 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// What the main window shows: home (all meetings), chat across meetings, the meeting in progress, or a saved meeting.
+/// What the main window shows: the status page, the meeting list, a chat, the meeting in progress, a saved meeting, or an
+/// extension's tab.
 enum Pane: Hashable {
-    case home, chat, live
+    case home, meetings, newChat, live
+    case chat(UUID)
     case extensionTab(String)
     case meeting(String)
 }
@@ -11,16 +13,20 @@ enum Pane: Hashable {
 @MainActor
 public struct MainView: View {
     @EnvironmentObject var rec: Recorder
+    @ObservedObject private var chats = ChatStore.shared
     @State private var pane: Pane? = .home
+    @State private var renaming: UUID?
+    @State private var renameText = ""
 
     public init() {}
 
     public var body: some View {
         NavigationSplitView {
             List(selection: $pane) {
+                Label("New chat", systemImage: "square.and.pencil").tag(Pane.newChat)
                 Label("Home", systemImage: "house").tag(Pane.home)
-                Label("Chat", systemImage: "bubble.left.and.bubble.right").tag(Pane.chat)
-                ForEach(InferoidExtensions.sidebarItems) { item in
+                Label("Meetings", systemImage: "person.2.wave.2").tag(Pane.meetings)
+                ForEach(InferoidExtensions.topItems) { item in
                     Label(item.title, systemImage: item.systemImage).tag(Pane.extensionTab(item.id))
                 }
                 if rec.isRecording || rec.isWriting || !rec.lines.isEmpty {
@@ -30,38 +36,62 @@ public struct MainView: View {
                             .tag(Pane.live)
                     }
                 }
-                if !rec.meetings.isEmpty {
-                    Section("Recent") {
-                        ForEach(rec.meetings.prefix(10)) { m in
-                            Text(m.title).lineLimit(1).tag(Pane.meeting(m.id))
+                let saved = chats.threads.filter { !$0.messages.isEmpty }
+                if !saved.isEmpty {
+                    Section("Chats") {
+                        ForEach(saved) { thread in
+                            Text(thread.title).lineLimit(1).tag(Pane.chat(thread.id))
+                                .contextMenu {
+                                    Button("Rename") { renameText = thread.title; renaming = thread.id }
+                                    Button("Delete", role: .destructive) {
+                                        if pane == .chat(thread.id) { pane = .home }
+                                        chats.delete(thread.id)
+                                    }
+                                }
                         }
                     }
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 6) {
-                    Image(systemName: rec.online ? "lock.fill" : "airplane")
-                    Text(rec.online ? "Everything runs on this Mac" : "Offline. Everything runs on this Mac")
-                    Spacer()
-                    SettingsLink { Image(systemName: "gearshape") }
+                VStack(alignment: .leading, spacing: 2) {
+                    Divider().padding(.bottom, 6)
+                    ForEach(InferoidExtensions.bottomItems) { item in
+                        Button { pane = .extensionTab(item.id) } label: {
+                            Label(item.title, systemImage: item.systemImage)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(RoundedRectangle(cornerRadius: 6)
+                                    .fill(pane == .extensionTab(item.id) ? Color.accentColor.opacity(0.18) : Color.clear))
+                                .contentShape(Rectangle())
+                        }
                         .buttonStyle(.plain)
-                        .help("Settings: instructions, note template, feedback (⌘,)")
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: rec.online ? "lock.fill" : "airplane")
+                        Text(rec.online ? "Everything runs on this Mac" : "Offline. Everything runs on this Mac")
+                        Spacer()
+                        SettingsLink { Image(systemName: "gearshape") }
+                            .buttonStyle(.plain)
+                            .help("Settings: instructions, note template, feedback (⌘,)")
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.top, 6)
                 }
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+                .padding(.horizontal, 8).padding(.bottom, 10)
             }
         } detail: {
             switch pane ?? .home {
-            case .home: HomeView(pane: $pane)
-            case .chat: AskView(open: { pane = .meeting($0.id) })
+            case .home: HomeStatusView(pane: $pane)
+            case .meetings: MeetingsView(pane: $pane)
+            case .newChat: ProgressView()
+            case .chat(let id): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }).id(id)
             case .live: LiveMeetingView()
             case .extensionTab(let id):
                 if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }
             case .meeting(let id):
-                if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { HomeView(pane: $pane) }
+                if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { MeetingsView(pane: $pane) }
             }
         }
         .toolbar {
@@ -75,13 +105,21 @@ public struct MainView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(rec.isRecording ? .red : .accentColor)
-                .keyboardShortcut(.return, modifiers: .command)
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
                 .disabled(rec.isWriting)
             }
         }
-        .frame(minWidth: 780, minHeight: 540)
+        .frame(minWidth: 820, minHeight: 560)
         .onAppear { rec.reloadMeetings() }
         .onChange(of: rec.isRecording) { _, on in if on { pane = .live } }
+        .onChange(of: pane) { _, new in
+            if new == .newChat { pane = .chat(chats.newThread()) }
+        }
+        .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Title", text: $renameText)
+            Button("Save") { if let id = renaming { chats.rename(id, to: renameText) }; renaming = nil }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
     }
 
     private var liveLabel: String {
@@ -90,9 +128,98 @@ public struct MainView: View {
     }
 }
 
-// MARK: - Home
+// MARK: - Home: status
 
-struct HomeView: View {
+struct HomeStatusView: View {
+    @EnvironmentObject var rec: Recorder
+    @ObservedObject private var chats = ChatStore.shared
+    @Binding var pane: Pane?
+    @State private var testing = false
+    @State private var testResult: String?
+    @State private var testOK = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Home").font(.largeTitle.bold())
+                if let status = InferoidExtensions.homeStatus { status }
+                card {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("AI model").font(.headline)
+                            Text(Summarizer.displayName(rec.model)).foregroundStyle(.secondary)
+                            if let testResult {
+                                Label(testResult, systemImage: testOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundStyle(testOK ? Color.green : Color.orange)
+                                    .font(.callout).textSelection(.enabled)
+                            } else {
+                                Text("Runs on this Mac. Test it to see it answer.").font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button(testing ? "Testing…" : "Test model") { test() }.disabled(testing || rec.isWriting)
+                    }
+                }
+                card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Start").font(.headline)
+                        HStack(spacing: 10) {
+                            Button { pane = .newChat } label: { Label("New chat", systemImage: "square.and.pencil") }
+                                .buttonStyle(.borderedProminent)
+                            Button {
+                                if !rec.isRecording { rec.toggle() }
+                                pane = .live
+                            } label: { Label(rec.isRecording ? "Open the meeting" : "Start meeting", systemImage: "mic.fill") }
+                                .disabled(rec.isWriting)
+                            MeetingSettings()
+                        }
+                        Text("\(rec.meetings.count) meetings and \(savedChats) chats on this Mac. Nothing is sent to a cloud AI.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .navigationTitle("Home")
+    }
+
+    private var savedChats: Int { chats.threads.filter { !$0.messages.isEmpty }.count }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.15)))
+    }
+
+    private func test() {
+        testing = true; testResult = nil
+        let model = rec.model
+        Task { @MainActor in
+            let started = Date()
+            do {
+                try await ModelManager.shared.ensure(model)
+                let reply = try await Summarizer.complete(system: "Reply in one short sentence.", user: "Say that you are ready to help.",
+                                                          model: model, maxTokens: 60)
+                let seconds = Date().timeIntervalSince(started)
+                testOK = !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                testResult = testOK ? String(format: "Ready (%.1f s): %@", seconds, String(reply.prefix(120))) : "The model gave an empty answer."
+            } catch {
+                testOK = false
+                testResult = "Not ready: \(error.localizedDescription)"
+            }
+            ModelManager.shared.idle()
+            testing = false
+        }
+    }
+}
+
+// MARK: - Meetings
+
+struct MeetingsView: View {
     @EnvironmentObject var rec: Recorder
     @Binding var pane: Pane?
 
@@ -144,7 +271,7 @@ struct HomeView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle("Home")
+        .navigationTitle("Meetings")
     }
 
     private var groups: [(day: String, items: [Meeting])] {
@@ -493,71 +620,6 @@ struct MarkdownBlock: View {
 
     private func inline(_ s: String) -> Text {
         Text((try? AttributedString(markdown: s)) ?? AttributedString(s))
-    }
-}
-
-// MARK: - Chat across all meetings
-
-struct AskView: View {
-    @EnvironmentObject var rec: Recorder
-    var open: (Meeting) -> Void = { NSWorkspace.shared.open($0.folder.appendingPathComponent("notes.md")) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Chat").font(.title2.bold())
-            HStack {
-                TextField("Ask anything, or ask about your meetings", text: $rec.askQuery)
-                    .textFieldStyle(.roundedBorder).controlSize(.large)
-                    .onSubmit { rec.ask() }
-                Button("Ask") { rec.ask() }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                    .disabled(rec.askQuery.trimmingCharacters(in: .whitespaces).isEmpty || rec.askBusy || rec.isWriting)
-                if rec.askBusy { ProgressView().controlSize(.small) }
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if !rec.askAnswer.isEmpty {
-                        Text(rec.askAnswer).textSelection(.enabled)
-                            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
-                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.15)))
-                    }
-                    let hits = rec.askSources.isEmpty ? rec.searchHits : rec.askSources
-                    if !hits.isEmpty {
-                        Text(rec.askSources.isEmpty ? "Matching meetings" : "Answered from").font(.headline).padding(.top, 4)
-                    }
-                    ForEach(hits) { hit in
-                        Button { open(hit.meeting) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(hit.meeting.title).font(.body.weight(.medium))
-                                    Spacer()
-                                    Text(dayLabel(hit.meeting.date)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Text(hit.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if rec.askQuery.isEmpty && rec.askAnswer.isEmpty {
-                        Text(rec.meetings.isEmpty ? "Your saved meetings will be searchable here."
-                             : "\(rec.meetings.count) meetings on this Mac. Ask things like \"what did we agree on pricing?\" Answers cite the meeting.")
-                            .foregroundStyle(.secondary).padding(.top, 20)
-                    }
-                    if let error = rec.error, !rec.askBusy, error.hasPrefix("Ask") {
-                        Text(error).font(.caption).foregroundStyle(.red)
-                    }
-                }
-            }
-        }
-        .padding(28)
-        .frame(maxWidth: 760, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .top)
-        .navigationTitle("Chat")
-        .onAppear { rec.reloadMeetings() }
     }
 }
 
