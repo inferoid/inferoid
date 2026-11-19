@@ -5,12 +5,15 @@ import SwiftUI
 @MainActor
 public struct InferoidNotesApp: App {
     @StateObject private var rec = Recorder.shared
+    @StateObject private var vault = VaultState.shared
 
-    public init() {}
+    public init() {
+        Vault.openAtLaunch()
+    }
 
     public var body: some Scene {
         Window("Inferoid", id: "main") {
-            MainView().environmentObject(rec)
+            if vault.error != nil { VaultErrorView() } else { MainView().environmentObject(rec) }
         }
         .defaultSize(width: 980, height: 680)
         Settings {

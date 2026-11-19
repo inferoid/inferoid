@@ -394,13 +394,17 @@ func notesMarkdown(_ n: Notes, layout: NoteLayout = .current, attendeeNames: [St
 /// `folderName` once at launch so its meetings and settings never mix with the personal app's.
 public enum InferoidPaths {
     public static var folderName = "Inferoid Notes"
-    /// ~/Documents/<folderName>: meetings as plain Markdown files.
+    /// The mounted encrypted vault (set by `Vault.open()`). When set, all private data lives inside it.
+    public internal(set) static var privateRoot: URL?
+    /// Meetings (Markdown). Inside the vault when it is open; ~/Documents/<folderName> before the vault existed.
     public static var documents: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName)
+        if let privateRoot { return privateRoot.appendingPathComponent("Meetings", isDirectory: true) }
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName)
     }
-    /// ~/Library/Application Support/<folderName>: app state that is not a meeting.
+    /// App state that is not a meeting (chats, feedback outbox, workflows). Inside the vault when it is open.
     public static var support: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName, isDirectory: true)
+        if let privateRoot { return privateRoot.appendingPathComponent("Support", isDirectory: true) }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName, isDirectory: true)
     }
 }
 
