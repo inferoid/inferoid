@@ -231,6 +231,14 @@ struct MeetingsView: View {
                     Text("Start a meeting when the call begins. Inferoid listens to your microphone and the call audio, "
                          + "transcribes on this Mac, and writes the notes when you stop.")
                         .foregroundStyle(.secondary)
+                    if rec.isRecording && !rec.attendeeNames.isEmpty {
+                        Label("With \(rec.attendeeNames.joined(separator: ", ")) (from your calendar)", systemImage: "calendar")
+                            .font(.callout.weight(.medium))
+                    } else {
+                        Label("Start during a calendar event and Inferoid uses the guests' names. "
+                              + "With one guest, the transcript shows their name instead of \"Them\".", systemImage: "calendar")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     HStack(spacing: 10) {
                         Button {
                             if !rec.isRecording { rec.toggle() }
@@ -249,7 +257,7 @@ struct MeetingsView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.15)))
 
                 if rec.meetings.isEmpty {
-                    Text("Your meetings will appear here. Notes are plain files in ~/Documents/\(InferoidPaths.folderName).")
+                    Text("Your meetings will appear here, stored encrypted on this Mac.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(groups, id: \.day) { group in

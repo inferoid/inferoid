@@ -24,14 +24,36 @@ enum MeetingCalendar {
         guard let event = events.first else { return MeetingCalendarContext(attendeeNames: []) }
 
         var seen = Set<String>()
+        // A Google calendar added to macOS is titled with its account address; skip that guest too in case
+        // EventKit does not mark them as the current user.
+        let own = Set([event.calendar?.title, event.calendar?.source?.title].compactMap { $0?.lowercased() })
         let names = (event.attendees ?? []).compactMap { participant -> String? in
             guard !participant.isCurrentUser,
-                  let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !name.isEmpty,
+                  !own.contains(address(participant.url)),
+                  let name = displayName(name: participant.name, url: participant.url),
                   seen.insert(name).inserted else { return nil }
             return name
         }
         return MeetingCalendarContext(attendeeNames: names)
+    }
+
+    static func address(_ url: URL?) -> String {
+        var a = url?.absoluteString.lowercased() ?? ""
+        if a.hasPrefix("mailto:") { a = String(a.dropFirst(7)) }
+        return a
+    }
+
+    /// The guest's name, or one made from their email when the invite only has an address
+    /// (Google often sends "ryan.green@antler.co" with no name: that becomes "Ryan Green").
+    static func displayName(name: String?, url: URL?) -> String? {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty && !trimmed.contains("@") { return trimmed }
+        var address = trimmed.contains("@") ? trimmed : (url?.absoluteString ?? "")
+        if address.lowercased().hasPrefix("mailto:") { address = String(address.dropFirst(7)) }
+        guard let local = address.split(separator: "@").first, address.contains("@") else { return nil }
+        let words = local.split(whereSeparator: { ".-_+".contains($0) }).filter { !$0.allSatisfy(\.isNumber) }
+        guard !words.isEmpty else { return nil }
+        return words.map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }.joined(separator: " ")
     }
 
     private static func requestAccess(to store: EKEventStore) async -> Bool {
