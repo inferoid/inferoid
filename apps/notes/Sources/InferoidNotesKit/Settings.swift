@@ -52,11 +52,25 @@ final class Prefs: ObservableObject {
     static let shared = Prefs()
     nonisolated static let instructionsLimit = 300
 
-    @Published var instructions = UserDefaults.standard.string(forKey: "instructions") ?? "" {
+    /// Kept in the encrypted vault (they can be personal), not in macOS preferences.
+    nonisolated static var instructionsFile: URL { InferoidPaths.support.appendingPathComponent("instructions.txt") }
+    @Published var instructions = Prefs.loadInstructions() {
         didSet {
             if instructions.count > Prefs.instructionsLimit { instructions = String(instructions.prefix(Prefs.instructionsLimit)) }
-            UserDefaults.standard.set(instructions, forKey: "instructions")
+            try? FileManager.default.createDirectory(at: InferoidPaths.support, withIntermediateDirectories: true)
+            try? instructions.write(to: Prefs.instructionsFile, atomically: true, encoding: .utf8)
         }
+    }
+
+    /// Reads the instructions from the vault; moves any older copy out of macOS preferences on first use.
+    nonisolated static func loadInstructions() -> String {
+        if let text = try? String(contentsOf: instructionsFile, encoding: .utf8) { return text }
+        guard let old = UserDefaults.standard.string(forKey: "instructions") else { return "" }
+        try? FileManager.default.createDirectory(at: InferoidPaths.support, withIntermediateDirectories: true)
+        if (try? old.write(to: instructionsFile, atomically: true, encoding: .utf8)) != nil {
+            UserDefaults.standard.removeObject(forKey: "instructions")
+        }
+        return old
     }
     @Published var layout = NoteLayout.current {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(layout), forKey: "noteLayout") }
@@ -70,7 +84,7 @@ final class Prefs: ObservableObject {
 
     /// Instructions as sent to the model: one line, trimmed, capped.
     nonisolated static var instructionsNow: String {
-        let raw = UserDefaults.standard.string(forKey: "instructions") ?? ""
+        let raw = loadInstructions()
         return String(raw.split(whereSeparator: \.isNewline).joined(separator: " ")
             .trimmingCharacters(in: .whitespaces).prefix(instructionsLimit))
     }

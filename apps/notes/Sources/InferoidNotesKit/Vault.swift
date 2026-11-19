@@ -91,10 +91,17 @@ public enum Vault {
         }
     }
 
+    /// Work to finish before the vault detaches, e.g. stopping a helper that keeps files open inside it.
+    public static var willClose: [() -> Void] = []
+
     /// Detaches the vault (on quit). Data stays encrypted on disk.
     public static func close() {
         guard let point = mountPoint else { return }
-        _ = try? hdiutil(["detach", point.path])
+        willClose.forEach { $0() }
+        if (try? hdiutil(["detach", point.path])) == nil {
+            Thread.sleep(forTimeInterval: 1)  // a helper may still be exiting
+            _ = try? hdiutil(["detach", point.path, "-force"])
+        }
         mountPoint = nil
     }
 
