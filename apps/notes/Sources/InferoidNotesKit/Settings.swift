@@ -252,8 +252,47 @@ public struct SettingsView: View {
             TemplateSettings().tabItem { Label("Note template", systemImage: "list.bullet.rectangle") }
             AudioSettings().tabItem { Label("Audio", systemImage: "waveform") }
             FeedbackSettings().tabItem { Label("Feedback", systemImage: "hand.thumbsup") }
+            PrivacySettings().tabItem { Label("Privacy", systemImage: "lock") }
         }
         .frame(width: 560, height: 460)
+    }
+}
+
+struct PrivacySettings: View {
+    @State private var legacy = Vault.legacyItems
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(Vault.mountPoint != nil ? "Your meetings, chats and app data are encrypted on this Mac."
+                                          : "The encrypted vault is not open.", systemImage: "lock.fill")
+                .font(.headline)
+            Text("They are stored in an AES-256 encrypted disk image whose key is in your Keychain. Copies of that file, Time Machine backups and iCloud never contain readable notes. While Inferoid is open, other apps running as you could read them, like any open file.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button("Export meetings as Markdown…") { export() }
+            Text("For Obsidian or your own backup. The exported copy is not encrypted.")
+                .font(.caption).foregroundStyle(.secondary)
+            if !legacy.isEmpty {
+                Divider()
+                Text("Unencrypted copies from before the vault are still on this Mac:")
+                ForEach(legacy, id: \.self) { Text($0.path).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle) }
+                Button("Move them to the Trash") {
+                    do { try Vault.deleteLegacyCopies(); legacy = Vault.legacyItems; message = "Moved to the Trash. Empty the Trash to remove them for good." }
+                    catch { message = error.localizedDescription }
+                }
+            }
+            if let message { Text(message).font(.caption) }
+            Spacer()
+        }
+        .padding(20)
+    }
+
+    private func export() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.prompt = "Export here"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        do { try Vault.exportMeetings(to: folder); message = "Exported to \(folder.path)." }
+        catch { message = error.localizedDescription }
     }
 }
 
