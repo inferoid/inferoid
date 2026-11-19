@@ -241,8 +241,25 @@ public final class ChatStore: ObservableObject {
         if !hits.isEmpty {
             s += "Meeting excerpts that may help:\n" + Brain.context(for: question, hits: hits, budget: 12_000) + "\n"
         }
+        if let fact = letterCountFact(question) { s += fact + "\n" }
         s += "User: " + question
         return s
+    }
+
+    /// Small models read word pieces, not letters, so they miscount letters ("no r's in strawberry"). Count them in
+    /// code and hand the model the exact answer.
+    nonisolated static func letterCountFact(_ question: String) -> String? {
+        let pattern = #"(?i)\b(?:how\s+many|count|number\s+of)\b.*?(?<![a-z'])(['"]?)([a-z])\1('s|s)?(?![a-z]).*?\b(?:in|does|of)\s+(?:the\s+word\s+)?['"]?([a-z]{2,})"#
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: question, range: NSRange(question.startIndex..., in: question)),
+              let q = Range(m.range(at: 1), in: question), let l = Range(m.range(at: 2), in: question),
+              let w = Range(m.range(at: 4), in: question) else { return nil }
+        let letter = question[l].lowercased(), word = question[w].lowercased()
+        let quoted = !question[q].isEmpty, plural = m.range(at: 3).location != NSNotFound
+        if (letter == "i" || letter == "a") && !quoted && !plural { return nil }  // "did I have", "a meeting"
+        let count = word.filter { String($0) == letter }.count
+        let spelled = word.map(String.init).joined(separator: "-")
+        return "Checked by code (exact): \"\(word)\" is spelled \(spelled) and has \(count) letter \"\(letter)\". Use this count."
     }
 
     /// While streaming, hide a half-written action block.
