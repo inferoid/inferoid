@@ -201,6 +201,16 @@ public final class Recorder: ObservableObject {
 
     func writeNotes() async {
         guard !lines.isEmpty else { status = "Nothing was said"; return }
+        if Grounding.wordCount(lines) < Grounding.minWords {
+            notes = Grounding.shortNotes(lines)
+            notesInfo = "Not enough was said for notes; the transcript is saved."
+            status = "Notes ready"
+            savedFolder = try? Store.save(started: started, lines: lines, notes: notes,
+                                          meta: ["template": template.rawValue, "duration_s": Int(elapsed), "short": true],
+                                          attendeeNames: attendeeNames)
+            reloadMeetings()
+            return
+        }
         isWriting = true
         notes = nil
         status = "Writing notes on this Mac…"
@@ -224,8 +234,13 @@ public final class Recorder: ObservableObject {
                     r.notes = partial
                 }
             }
-            notes = result.notes
+            let (checked, dropped) = Grounding.check(result.notes, transcript: transcriptText(lines), attendees: attendeeNames)
+            notes = checked
             notesInfo = String(format: "Written by %@ on this Mac in %.0f s", Summarizer.displayName(model), result.seconds)
+            if dropped > 0 {
+                notesInfo += " · removed \(dropped) point\(dropped == 1 ? "" : "s") naming things not in the transcript"
+                meta["grounding_dropped"] = dropped
+            }
             meta["notes_seconds"] = result.seconds
             meta["seconds_after_stop"] = Date().timeIntervalSince(writeStarted)
             meta["prompt_tokens"] = result.promptTokens
