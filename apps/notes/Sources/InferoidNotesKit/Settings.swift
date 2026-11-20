@@ -78,7 +78,7 @@ final class Prefs: ObservableObject {
     @Published var askFeedback = UserDefaults.standard.object(forKey: "askFeedback") as? Bool ?? true {
         didSet { UserDefaults.standard.set(askFeedback, forKey: "askFeedback") }
     }
-    @Published var voiceProcessingEnabled = UserDefaults.standard.object(forKey: "voiceProcessingEnabled") as? Bool ?? true {
+    @Published var voiceProcessingEnabled = UserDefaults.standard.object(forKey: "voiceProcessingEnabled") as? Bool ?? false {
         didSet { UserDefaults.standard.set(voiceProcessingEnabled, forKey: "voiceProcessingEnabled") }
     }
 
@@ -317,7 +317,7 @@ struct AudioSettings: View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Suppress call audio in the microphone", isOn: $prefs.voiceProcessingEnabled)
                 .toggleStyle(.checkbox)
-            Text("Uses macOS voice processing (acoustic echo cancellation) so speaker output is less likely to be transcribed as Me. Turn it off if it makes your microphone sound worse.")
+            Text("Only needed when the call plays through your speakers instead of headphones. Uses macOS echo cancellation so the other side is less likely to be transcribed as Me. If it gives silence, Inferoid turns it off for that meeting.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()

@@ -100,13 +100,13 @@ public final class Recorder: ObservableObject {
         segMe = me; segThem = them
 
         var problems: [String] = []
+        let pushMe: ([Float]) -> Void = { [meQueue] samples in meQueue.async { me.push(samples) } }
         if await AVCaptureDevice.requestAccess(for: .audio) {
             let capture = MicCapture()
             do {
-                try capture.start({ [meQueue] samples in
-                    meQueue.async { me.push(samples) }
-                }, voiceProcessingEnabled: Prefs.shared.voiceProcessingEnabled)
+                try capture.start(pushMe, voiceProcessingEnabled: Prefs.shared.voiceProcessingEnabled)
                 mic = capture
+                if capture.voiceProcessing { fallBackIfSilent(capture, pushMe) }
             } catch { problems.append("Microphone: \(error.localizedDescription)") }
         } else {
             problems.append("Microphone access is off. Turn it on in System Settings > Privacy & Security > Microphone.")
@@ -136,6 +136,25 @@ public final class Recorder: ObservableObject {
                 r.elapsed = Date().timeIntervalSince(r.started)
                 r.levelMe = r.segMe?.level ?? 0
                 r.levelThem = r.segThem?.level ?? 0
+            }
+        }
+    }
+
+    /// Voice processing can deliver pure silence (for example while another app also uses it on the same mic).
+    /// After 3 s of digital silence, restart the microphone without it.
+    private func fallBackIfSilent(_ capture: MicCapture, _ pushMe: @escaping ([Float]) -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard isRecording, mic === capture, !capture.heardSound else { return }
+            capture.stop()
+            let plain = MicCapture()
+            do {
+                try plain.start(pushMe, voiceProcessingEnabled: false)
+                mic = plain
+                error = "The echo filter gave silence on this microphone, so Inferoid turned it off for this meeting."
+            } catch {
+                mic = nil
+                self.error = "Microphone: \(error.localizedDescription)"
             }
         }
     }
