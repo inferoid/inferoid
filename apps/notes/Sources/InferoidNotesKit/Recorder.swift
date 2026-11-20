@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import Network
@@ -52,6 +53,20 @@ public final class Recorder: ObservableObject {
     private var prefillBusy = false
     private var prefilledLines = 0
     private let monitor = NWPathMonitor()
+    // Reliability: crash-safe audio journal and per-channel health (see RecordingJournal, ChannelStats).
+    private var journal: RecordingJournal?
+    private var statsMe = ChannelStats()
+    private var statsThem = ChannelStats()
+    private var pushMe: (([Float]) -> Void)?
+    private var pushThem: (([Float]) -> Void)?
+    private var lastRestart: [RecordingJournal.Channel: Date] = [:]
+    private var restartsInARow: [RecordingJournal.Channel: Int] = [:]
+    private var healthMessage: String?
+    private var deviceWatcher: AudioDeviceWatcher?
+    private var wakeObserver: NSObjectProtocol?
+    private var ticks = 0
+    /// Meetings that were interrupted (crash, force quit, power loss) and can be recovered from their audio.
+    @Published var pendingRecoveries: [RecordingJournal.Pending] = []
 
     public init() {
         model = UserDefaults.standard.string(forKey: "model") ?? NotesConfig.load()?.appModel ?? "gemma4:e4b"
@@ -61,6 +76,8 @@ public final class Recorder: ObservableObject {
         }
         monitor.start(queue: DispatchQueue(label: "ai.inferoid.notes.net"))
         meetings = Brain.load()
+        // Quitting mid-meeting: flush the audio journal before the vault detaches; it is offered for recovery next time.
+        Vault.willClose.append { MainActor.assumeIsolated { Recorder.shared.journal?.close() } }
         Task { await refreshModels(); await prepare() }
         Task.detached { await FeedbackSender.flush() }  // ratings saved while offline
     }
@@ -99,8 +116,21 @@ public final class Recorder: ObservableObject {
         let them = Segmenter { [weak self] samples, start, end in self?.utterance(otherSpeaker, samples, start, end) }
         segMe = me; segThem = them
 
+        let journal = try? RecordingJournal(manifest: .init(started: started, template: template.rawValue, model: model,
+                                                             attendees: attendeeNames, otherSpeaker: otherSpeaker))
+        self.journal = journal
+        let statsMe = ChannelStats(), statsThem = ChannelStats()
+        self.statsMe = statsMe; self.statsThem = statsThem
+        lastRestart = [:]; restartsInARow = [:]; healthMessage = nil
+        let pushMe: ([Float]) -> Void = { [meQueue] samples in
+            meQueue.async { statsMe.record(samples); journal?.append(samples, to: .me); me.push(samples) }
+        }
+        let pushThem: ([Float]) -> Void = { [themQueue] samples in
+            themQueue.async { statsThem.record(samples); journal?.append(samples, to: .them); them.push(samples) }
+        }
+        self.pushMe = pushMe; self.pushThem = pushThem
+
         var problems: [String] = []
-        let pushMe: ([Float]) -> Void = { [meQueue] samples in meQueue.async { me.push(samples) } }
         if await AVCaptureDevice.requestAccess(for: .audio) {
             let capture = MicCapture()
             do {
@@ -113,18 +143,33 @@ public final class Recorder: ObservableObject {
         }
         let tap = SystemAudioCapture()
         do {
-            try tap.start { [themQueue] samples in themQueue.async { them.push(samples) } }
+            try tap.start(pushThem)
             system = tap
         } catch {
             problems.append("Call audio: \(error.localizedDescription) Allow it in System Settings > Privacy & Security > Screen & System Audio Recording.")
         }
         if mic == nil && system == nil {
             error = problems.joined(separator: "\n")
+            journal?.discard(); self.journal = nil
             return
         }
         if !problems.isEmpty { error = problems.joined(separator: "\n") }
         isRecording = true
         status = "Recording"
+        deviceWatcher = AudioDeviceWatcher { change in
+            Task { @MainActor in
+                let r = Recorder.shared
+                if change == .input { r.restart(.me, reason: "switched to another microphone") }
+                else { r.restart(.them, reason: "switched to another speaker or headset") }
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                                          object: nil, queue: .main) { _ in
+            Task { @MainActor in
+                Recorder.shared.restart(.me, reason: "paused while the Mac slept")
+                Recorder.shared.restart(.them, reason: "paused while the Mac slept")
+            }
+        }
         prefilledLines = 0
         // Read the transcript into the model every 45 s during the meeting, so notes start right after hang-up.
         prefillTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { _ in
@@ -136,7 +181,88 @@ public final class Recorder: ObservableObject {
                 r.elapsed = Date().timeIntervalSince(r.started)
                 r.levelMe = r.segMe?.level ?? 0
                 r.levelThem = r.segThem?.level ?? 0
+                r.ticks += 1
+                if r.ticks % 10 == 0 { r.checkHealth() }
             }
+        }
+    }
+
+    /// Once a second while recording: restart a channel that stopped delivering audio, or a microphone that gives
+    /// only digital silence (a quiet room is never exactly zero). Call audio is legitimately all zeros when nothing
+    /// plays, so only stalled callbacks count for it.
+    func checkHealth() {
+        guard isRecording else { return }
+        let now = Date()
+        if mic != nil {
+            let s = statsMe.snapshot
+            if now.timeIntervalSince(s.lastCallback) > 3 {
+                restart(.me, reason: "stopped sending audio")
+            } else if s.total > RecordingJournal.rate * 3, now.timeIntervalSince(s.lastSound) > 5,
+                      (restartsInARow[.me] ?? 0) < 3 {
+                restart(.me, reason: "gave only silence")
+            }
+        }
+        if system != nil, now.timeIntervalSince(statsThem.snapshot.lastCallback) > 3 {
+            restart(.them, reason: "stopped sending audio")
+        }
+        // Healthy again for 30 s: forget earlier restarts and clear the notice.
+        for channel in [RecordingJournal.Channel.me, .them] {
+            if let last = lastRestart[channel], now.timeIntervalSince(last) > 30 { restartsInARow[channel] = 0 }
+        }
+        if let note = healthMessage, error == note,
+           lastRestart.values.allSatisfy({ now.timeIntervalSince($0) > 30 }) {
+            error = nil; healthMessage = nil
+        }
+    }
+
+    /// Stops and reopens one channel (at most every 5 s). The gap is filled with silence so transcript times stay
+    /// in step with the clock and with the other channel.
+    func restart(_ channel: RecordingJournal.Channel, reason: String) {
+        guard isRecording else { return }
+        let now = Date()
+        if let last = lastRestart[channel], now.timeIntervalSince(last) < 5 { return }
+        lastRestart[channel] = now
+        let attempts = (restartsInARow[channel] ?? 0) + 1
+        restartsInARow[channel] = attempts
+        let label = channel == .me ? "Microphone" : "Call audio"
+        let stats = channel == .me ? statsMe : statsThem
+        guard let push = channel == .me ? pushMe : pushThem else { return }
+        padGap(stats, push)
+        do {
+            switch channel {
+            case .me:
+                mic?.stop()
+                let fresh = MicCapture()
+                try fresh.start(push, voiceProcessingEnabled: false)   // a restart means trouble: keep it simple
+                mic = fresh
+            case .them:
+                system?.stop()
+                let fresh = SystemAudioCapture()
+                try fresh.start(push)
+                system = fresh
+            }
+            stats.restarted()
+            let note = attempts >= 3
+                ? "\(label) keeps dropping (\(reason)). Check it in System Settings > Sound."
+                : "\(label) \(reason); reconnected."
+            error = note; healthMessage = note
+        } catch {
+            if channel == .me { mic = nil } else { system = nil }
+            let note = "\(label) \(reason) and could not reconnect: \(error.localizedDescription)"
+            self.error = note; healthMessage = nil
+        }
+    }
+
+    private func padGap(_ stats: ChannelStats, _ push: ([Float]) -> Void) {
+        let s = stats.snapshot
+        guard let first = s.firstSample else { return }
+        var missing = Int(Date().timeIntervalSince(first) * Double(RecordingJournal.rate)) - s.total
+        guard missing > RecordingJournal.rate / 2 else { return }
+        missing = min(missing, RecordingJournal.rate * 3600)
+        while missing > 0 {
+            let n = min(missing, RecordingJournal.rate)
+            push([Float](repeating: 0, count: n))
+            missing -= n
         }
     }
 
@@ -188,6 +314,9 @@ public final class Recorder: ObservableObject {
         timer?.invalidate(); timer = nil
         prefillTimer?.invalidate(); prefillTimer = nil
         mic?.stop(); system?.stop(); mic = nil; system = nil
+        deviceWatcher = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        wakeObserver = nil; pushMe = nil; pushThem = nil
         isRecording = false
         levelMe = 0; levelThem = 0
         let me = segMe, them = segThem
@@ -196,7 +325,72 @@ public final class Recorder: ObservableObject {
         try? await Task.sleep(nanoseconds: 100_000_000)
         for task in pending { await task.value }
         pending = []
+        journal?.close()
         await writeNotes()
+        // The journal is only deleted once the transcript is safely saved; otherwise it stays for recovery.
+        if savedFolder != nil { journal?.discard() }
+        journal = nil
+        refreshRecoveries()
+    }
+
+    // MARK: - Recovery of interrupted meetings
+
+    func refreshRecoveries() {
+        pendingRecoveries = RecordingJournal.pending(excluding: journal?.folder)
+    }
+
+    func discardRecovery(_ p: RecordingJournal.Pending) {
+        try? FileManager.default.removeItem(at: p.folder)
+        refreshRecoveries()
+    }
+
+    /// Re-transcribes an interrupted meeting from its saved audio, then writes and saves notes as usual.
+    func recover(_ p: RecordingJournal.Pending) async {
+        guard !isRecording, !isWriting else { return }
+        await prepare()
+        guard await transcriber.isReady else { return }
+        error = nil; notes = nil; notesInfo = ""; savedFolder = nil; feedbackFor = nil
+        isWriting = true
+        var recovered: [Line] = []
+        let total = max(1, p.seconds)
+        do {
+            for (channel, speaker) in [(RecordingJournal.Channel.me, "Me"), (.them, p.manifest.otherSpeaker)] {
+                let found = UtteranceBox()
+                let seg = Segmenter { samples, start, end in found.items.append((samples, start, end)) }
+                var done = 0.0
+                func drain() async {
+                    for (samples, start, end) in found.items {
+                        if let text = try? await transcriber.transcribe(samples), !text.isEmpty {
+                            recovered.append(Line(speaker: speaker, start: start, end: end, text: text))
+                        }
+                    }
+                    found.items.removeAll()
+                }
+                try await RecordingJournal.read(p.folder, channel) { chunk in
+                    seg.push(chunk)
+                    done += Double(chunk.count) / Double(RecordingJournal.rate)
+                    status = String(format: "Recovering the interrupted meeting… %@ %.0f%%",
+                                    channel == .me ? "your side" : "the call", 100 * min(1, done / total))
+                    await drain()
+                }
+                seg.flush()
+                await drain()
+            }
+        } catch {
+            self.error = "Recovery: \(error.localizedDescription)"
+        }
+        isWriting = false
+        lines = TranscriptDeduper.deduplicated(recovered.sorted { $0.start < $1.start })
+        started = p.manifest.started
+        attendeeNames = p.manifest.attendees
+        elapsed = total
+        if lines.isEmpty {
+            status = "Nothing was said in the interrupted meeting"
+            discardRecovery(p)
+            return
+        }
+        await writeNotes()
+        if savedFolder != nil { discardRecovery(p) }
     }
 
     func writeNotes() async {
@@ -294,3 +488,6 @@ public final class Recorder: ObservableObject {
 
 /// A mutable timestamp shared with the streaming callback.
 final class Stamp: @unchecked Sendable { var date = Date.distantPast }
+
+/// Collects utterances from a Segmenter during recovery.
+private final class UtteranceBox { var items: [([Float], Double, Double)] = [] }

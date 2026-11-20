@@ -215,3 +215,60 @@ final class Segmenter {
         }
     }
 }
+
+/// Health of one capture channel, updated on its audio queue and read by the recorder once a second.
+/// A live channel delivers callbacks continuously (silence included); a real microphone is never exactly zero.
+final class ChannelStats {
+    struct Snapshot { var lastCallback: Date; var lastSound: Date; var firstSample: Date?; var total: Int }
+    private let lock = NSLock()
+    private var s: Snapshot
+
+    init() { let now = Date(); s = Snapshot(lastCallback: now, lastSound: now, firstSample: nil, total: 0) }
+
+    func record(_ samples: [Float]) {
+        let now = Date()
+        let sound = samples.contains { abs($0) > 1e-6 }
+        lock.lock(); defer { lock.unlock() }
+        s.lastCallback = now
+        if sound { s.lastSound = now }
+        if s.firstSample == nil { s.firstSample = now }
+        s.total += samples.count
+    }
+
+    /// After a restart: give the new capture a fresh grace period (the sample total is kept for gap padding).
+    func restarted() {
+        let now = Date()
+        lock.lock(); defer { lock.unlock() }
+        s.lastCallback = now; s.lastSound = now
+    }
+
+    var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return s }
+}
+
+/// Calls back when the default input or output device changes (AirPods connect or disconnect, a USB mic is
+/// plugged in, the user picks another device). Listeners are removed when this object is released.
+final class AudioDeviceWatcher {
+    enum Change { case input, output }
+    private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private let queue = DispatchQueue(label: "ai.inferoid.notes.devices")
+
+    init(_ onChange: @escaping (Change) -> Void) {
+        for (selector, change) in [(kAudioHardwarePropertyDefaultInputDevice, Change.input),
+                                   (kAudioHardwarePropertyDefaultSystemOutputDevice, .output),
+                                   (kAudioHardwarePropertyDefaultOutputDevice, .output)] {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { _, _ in onChange(change) }
+            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block) == noErr {
+                listeners.append((address, block))
+            }
+        }
+    }
+
+    deinit {
+        for (address, block) in listeners {
+            var a = address
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &a, queue, block)
+        }
+    }
+}

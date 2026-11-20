@@ -219,6 +219,35 @@ struct HomeStatusView: View {
 
 // MARK: - Meetings
 
+/// An interrupted meeting (crash, force quit, power loss) whose audio was saved and can be transcribed now.
+struct RecoveryBanner: View {
+    @EnvironmentObject var rec: Recorder
+    let pending: RecordingJournal.Pending
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "arrow.counterclockwise.circle.fill").font(.title2).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("A meeting was interrupted").font(.headline)
+                Text("Recorded \(pending.manifest.started.formatted(date: .abbreviated, time: .shortened)), \(Int(pending.seconds / 60)) min of audio saved encrypted on this Mac. Inferoid can transcribe it and write the notes now.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Recover meeting") { Task { await rec.recover(pending) } }
+                        .buttonStyle(.borderedProminent).disabled(rec.isRecording || rec.isWriting)
+                    Button("Delete audio") { rec.discardRecovery(pending) }
+                }
+                .padding(.top, 4)
+                if rec.isWriting, rec.status.hasPrefix("Recovering") {
+                    Text(rec.status).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.orange.opacity(0.12)))
+    }
+}
+
 struct MeetingsView: View {
     @EnvironmentObject var rec: Recorder
     @Binding var pane: Pane?
@@ -226,6 +255,7 @@ struct MeetingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                ForEach(rec.pendingRecoveries) { p in RecoveryBanner(pending: p) }
                 VStack(alignment: .leading, spacing: 14) {
                     Text(rec.isRecording ? "A meeting is being recorded" : "Ready for your next call").font(.title2.bold())
                     Text("Start a meeting when the call begins. Inferoid listens to your microphone and the call audio, "
@@ -279,6 +309,7 @@ struct MeetingsView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .onAppear { rec.refreshRecoveries() }
         .navigationTitle("Meetings")
     }
 
