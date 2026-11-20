@@ -45,18 +45,24 @@ enum CaptureError: LocalizedError {
 final class MicCapture {
     private let engine = AVAudioEngine()
     private let resampler = MonoResampler()
+    /// Whether macOS voice processing (echo cancellation) is on for this capture.
+    private(set) var voiceProcessing = false
+    /// Set once any sample is above digital silence. A real microphone always picks up some room noise, so a mic
+    /// that stays at exactly zero is not delivering audio (seen with voice processing while another app uses the mic).
+    private(set) var heardSound = false
 
-    func start(_ onSamples: @escaping ([Float]) -> Void, voiceProcessingEnabled: Bool = true) throws {
+    func start(_ onSamples: @escaping ([Float]) -> Void, voiceProcessingEnabled: Bool = false) throws {
         let input = engine.inputNode
         if voiceProcessingEnabled {
-            // Voice processing is best-effort: some input devices do not expose it,
-            // but recording should still work when the user leaves the setting on.
-            try? input.setVoiceProcessingEnabled(true)
+            // Best-effort: some input devices do not expose it, and recording should still work.
+            voiceProcessing = (try? input.setVoiceProcessingEnabled(true)) != nil
         }
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { throw CaptureError.noMicrophone }
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [resampler] buffer, _ in
-            onSamples(resampler.convert(buffer))
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self, resampler] buffer, _ in
+            let samples = resampler.convert(buffer)
+            if self?.heardSound == false, samples.contains(where: { abs($0) > 1e-6 }) { self?.heardSound = true }
+            onSamples(samples)
         }
         engine.prepare()
         try engine.start()
