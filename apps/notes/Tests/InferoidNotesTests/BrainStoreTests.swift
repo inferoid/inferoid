@@ -60,7 +60,7 @@ final class BrainStoreTests: XCTestCase {
         let first = BrainExtractionPayload(
             entities: [BrainExtractionEntity(name: "Ryan Green", kind: "person"), BrainExtractionEntity(name: "Me", kind: "person")],
             facts: [BrainExtractionFact(kind: "position", subject: "Ryan Green", predicate: "budget", value: "Ryan supports a large budget", quote: "Ryan supports a large budget.", lineStart: 1, lineEnd: 1),
-                    BrainExtractionFact(kind: "commitment", subject: "Me", predicate: "send draft", owner: "Me", counterparty: "Ryan Green", due: "Friday", value: "send the draft", quote: "I will send the draft Friday.", lineStart: 2, lineEnd: 2)]
+                    BrainExtractionFact(kind: "commitment", subject: "Me", predicate: "send draft", value: "send the draft", owner: "Me", counterparty: "Ryan Green", due: "Friday", quote: "I will send the draft Friday.", lineStart: 2, lineEnd: 2)]
         )
         let second = BrainExtractionPayload(
             entities: [BrainExtractionEntity(name: "Ryan Green", kind: "person")],
