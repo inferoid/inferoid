@@ -45,7 +45,7 @@ def listing(mem: dict[str, float]) -> list[str]:
     return lines
 
 
-def add(key: str, mem: dict[str, float], out: Callable[[str], None] = print) -> int:
+def add(key: str, mem: dict[str, float], out: Callable[[str], None] = print, runtime: str = "mlx") -> int:
     job = JOBS.get(key)
     if not job:
         out(f"Unknown job {key!r}. Jobs: {', '.join(JOBS)}")
@@ -57,6 +57,8 @@ def add(key: str, mem: dict[str, float], out: Callable[[str], None] = print) -> 
         out(f"{key} picks a model and connects it to your coding agent: run inferoid setup and choose {key}.")
         return 1
     assert job.install is not None
+    if key == "notes" and runtime != "mlx":
+        return notes.install(mem, out, runtime=runtime)
     return job.install(mem, out)
 
 

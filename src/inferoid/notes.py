@@ -29,6 +29,15 @@ HF_REPOS = {  # model -> (Hugging Face repo, pinned revision)
 APP_NAME = "Inferoid.app"
 OLD_APP_NAMES = ["Inferoid Notes.app"]  # before 0.6.0
 PORT = 8090
+LLAMA_RELEASE_TAG = "b12600"
+LLAMA_ARCHIVE = f"llama-{LLAMA_RELEASE_TAG}-bin-macos-arm64.tar.gz"
+LLAMA_RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_RELEASE_TAG}"
+LLAMA_ARCHIVE_SHA256 = "9ced6f8cbce915968a865ded7718c2c4d14a69876bf9abf544533aec9b76e975"
+LLAMA_REPO = "unsloth/gemma-4-E4B-it-GGUF"
+LLAMA_REVISION = "bfc15c382204943c3a8fff0c750b94ae2364d7a3"
+LLAMA_BASE = "gemma-4-E4B-it-Q4_K_M.gguf"
+LLAMA_BASE_URL = f"https://huggingface.co/{LLAMA_REPO}/resolve/{LLAMA_REVISION}"
+LLAMA_BASE_SHA256 = "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
 # (model, minimum RAM GB, download GB, what to expect). Measured on 23 held-out calls, judged by two independent models.
 MODELS = [
     ("inferoid-notes-e4b", 16, 3.9, "our best notes model: about as few mistakes as a frontier cloud model, ~40 s per call on a 24 GB M4"),
@@ -119,6 +128,29 @@ def _app_sum(fetcher: Callable[[str, str, Path], Path], dest: Path) -> dict[str,
     return {APP_ZIP: text[0]} if text else {}
 
 
+def _checked_fetch(src: str, name: str, dest: Path, expected: str,
+                   fetcher: Callable[[str, str, Path], Path]) -> Path:
+    path = fetcher(src, name, dest)
+    if _sha256(path) != expected:
+        path.unlink(missing_ok=True)
+        raise ValueError(f"{name} did not match its checksum")
+    return path
+
+
+def _llama_server(archive: Path, root: Path) -> Path:
+    llama_root = root / "llama"
+    existing = next(llama_root.glob("*/llama-server"), None) if llama_root.exists() else None
+    if existing and existing.is_file():
+        return existing
+    llama_root.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as tar:
+        tar.extractall(llama_root, filter="data")
+    server = next(llama_root.glob("*/llama-server"), None)
+    if not server or not server.is_file():
+        raise ValueError(f"{archive.name} did not contain llama-server")
+    return server
+
+
 def config_path() -> Path:
     return home() / "notes.json"
 
@@ -132,17 +164,25 @@ def installed() -> dict[str, Any] | None:
 
 def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: dict[str, Any] | None = None,
             fetcher: Callable[[str, str, Path], Path] = fetch, run: Callable[[list[str]], int] | None = None,
-            apps_dir: Path | None = None, python: str | None = None) -> int:
+            apps_dir: Path | None = None, python: str | None = None, runtime: str = "mlx") -> int:
     """Download and install the app and the notes model. Returns 0 on success."""
     run = run or (lambda cmd: subprocess.call(cmd))
+    if runtime not in {"mlx", "llama"}:
+        out("Runtime must be mlx or llama.")
+        return 2
     if platform.system() != "Darwin" and not os.environ.get("INFEROID_NOTES_ANY_OS"):
         out("The Inferoid app is a Mac app (Apple silicon). Windows and Linux are not supported yet.")
         return 1
     choice = pick(memory)
+    if runtime == "llama" and memory.get("ram_gb", 0.0) < 15.5:
+        out("The llama runtime needs at least 16 GB of memory for Gemma 4 E4B.")
+        return 1
     if not choice:
         out(f"The Inferoid app needs at least {MIN_RAM} GB of memory; this machine has {memory.get('ram_gb', 0):.0f} GB.")
         return 1
     model, _, size, why = choice
+    if runtime == "llama":
+        model, size, why = "gemma-4-E4B-it-Q4_K_M", 5.0, "one Gemma 4 E4B GGUF base model with per-skill LoRA adapters"
     src = source(cfg)
     root = home()
     downloads = root / "downloads"
@@ -151,7 +191,7 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
     try:
         if src:
             sums = _sums(src, downloads, fetcher)
-            names = (APP_ZIP, f"{model}.tar")
+            names = (APP_ZIP,) if runtime == "llama" else (APP_ZIP, f"{model}.tar")
         else:
             sums = _app_sum(fetcher, downloads)
             names = (APP_ZIP,)
@@ -167,14 +207,23 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         out(f"Download failed ({exc}). Check your connection and run: inferoid add notes")
         return 1
 
-    if src and not (model_dir / "config.json").exists():
+    if runtime == "mlx" and src and not (model_dir / "config.json").exists():
         out("  Unpacking the model…")
         with tarfile.open(files[f"{model}.tar"]) as tar:
             tar.extractall(root, filter="data")
 
     venv = root / "venv"
     py = venv / "bin" / "python"
-    if not py.exists():
+    if runtime == "llama":
+        out("  Installing llama-server and the Gemma 4 E4B base…")
+        try:
+            archive = _checked_fetch(LLAMA_RELEASE, LLAMA_ARCHIVE, downloads, LLAMA_ARCHIVE_SHA256, fetcher)
+            server = _llama_server(archive, root)
+            base = _checked_fetch(LLAMA_BASE_URL, LLAMA_BASE, root / "llama", LLAMA_BASE_SHA256, fetcher)
+        except (OSError, ValueError) as exc:
+            out(f"Download failed ({exc}). Check your connection and run: inferoid add notes --runtime llama")
+            return 1
+    elif not py.exists():
         uv = None if python else shutil.which("uv")
         out("  Installing the model server (mlx-lm). This takes 1-2 minutes…")
         if uv:  # uv brings its own Python: no Homebrew or system Python needed (macOS ships 3.9)
@@ -195,14 +244,14 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
             out(f"The model server environment was not created in {venv}.")
             return 1
 
-    if not (model_dir / "config.json").exists():
+    if runtime == "mlx" and not (model_dir / "config.json").exists():
         repo, rev = HF_REPOS[model]
         out(f"  Downloading the model from Hugging Face ({repo})…")
         code = f"from huggingface_hub import snapshot_download; snapshot_download({repo!r}, revision={rev!r}, local_dir={str(model_dir)!r})"
         if run([str(py), "-c", code]) != 0:
             out(f"Downloading {repo} failed. Check your connection and run: inferoid add notes")
             return 1
-    if not (model_dir / "config.json").exists():
+    if runtime == "mlx" and not (model_dir / "config.json").exists():
         out(f"  The model download did not contain {model}/config.json.")
         return 1
 
@@ -217,8 +266,13 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         out("Unzipping the app failed.")
         return 1
 
-    config_path().write_text(json.dumps({"model": model, "model_dir": str(model_dir), "python": str(py), "port": PORT,
-                                         "app": str(apps / APP_NAME)}, indent=2) + "\n")
+    if runtime == "llama":
+        installed_config = {"runtime": "llama", "server": str(server), "base": str(base), "port": PORT,
+                            "adapters": [], "model": model, "app": str(apps / APP_NAME)}
+    else:
+        installed_config = {"model": model, "model_dir": str(model_dir), "python": str(py), "port": PORT,
+                            "app": str(apps / APP_NAME)}
+    config_path().write_text(json.dumps(installed_config, indent=2) + "\n")
     out(f"\nThe Inferoid app is installed ({apps / APP_NAME}).")
     out("  Open it, click Start meeting, and allow Microphone and System Audio Recording when macOS asks.")
     out("  The notes model starts by itself when a meeting starts and stops after 10 idle minutes.")
