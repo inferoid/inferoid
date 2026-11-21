@@ -121,10 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
     night_cmds.choices["mark"].add_argument("status", choices=("pending", "done", "review"))
     night_cmds.choices["schedule"].add_argument("--at", default="01:00", help="HH:MM local time")
     nt = commands.add_parser("notes", help="Inferoid app: meeting notes + private brain on this Mac")
-    nt.add_subparsers(dest="notes_command", required=True).add_parser("install", help="Install the app and the notes model that fits this Mac")
+    nt_install = nt.add_subparsers(dest="notes_command", required=True).add_parser("install", help="Install the app and the notes model that fits this Mac")
+    nt_install.add_argument("--runtime", choices=("mlx", "llama"), default="mlx")
     commands.add_parser("jobs", help="What Inferoid can do on this machine (notes, coding, ...)")
     ad = commands.add_parser("add", help="Add a job, e.g. inferoid add notes")
     ad.add_argument("job")
+    ad.add_argument("--runtime", choices=("mlx", "llama"), default="mlx")
     rm = commands.add_parser("remove", help="Remove a job, e.g. inferoid remove notes (saved meetings stay)")
     rm.add_argument("job")
     un = commands.add_parser("uninstall", help="Remove everything inferoid installed (saved meetings stay)")
@@ -254,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import notes
         from .night import machine_memory
 
-        return notes.install(machine_memory())
+        return notes.install(machine_memory(), runtime=args.runtime)
     elif args.command == "remove":
         from . import catalog
 
@@ -270,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "jobs":
             print("\n".join(catalog.listing(machine_memory())))
             return 0
-        return catalog.add(args.job, machine_memory())
+        return catalog.add(args.job, machine_memory(), runtime=args.runtime)
     elif args.command == "models":
         from . import models
 

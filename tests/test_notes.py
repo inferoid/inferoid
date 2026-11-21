@@ -27,6 +27,22 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("INFEROID_NOTES_ANY_OS", "1")
 
 
+def _llama_source(tmp_path):
+    src = tmp_path / "llama-src"
+    src.mkdir()
+    (src / notes.APP_ZIP).write_bytes(b"zip")
+    archive = src / notes.LLAMA_ARCHIVE
+    with tarfile.open(archive, "w") as tar:
+        data = b"#!/bin/sh\n"
+        info = tarfile.TarInfo(f"llama-{notes.LLAMA_RELEASE_TAG}/llama-server")
+        info.size = len(data)
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(data))
+    (src / notes.LLAMA_BASE).write_bytes(b"gguf")
+    (src / "SHA256SUMS").write_text(hashlib.sha256(b"zip").hexdigest() + "  InferoidNotes.zip\n")
+    return src
+
+
 def test_pick_by_memory():
     assert notes.pick({"ram_gb": 24})[0] == "inferoid-notes-e4b"
     assert notes.pick({"ram_gb": 16})[0] == "inferoid-notes-e4b"
@@ -80,6 +96,32 @@ def test_install_default_pulls_release_app_and_hf_model(tmp_path, monkeypatch):
     assert notes.install({"ram_gb": 8}, lines.append, fetcher=fetcher, run=run, apps_dir=tmp_path, python="/usr/bin/python3") == 0, lines
     assert set(urls) == {notes.APP_BASE} and notes.installed()["model"] == "inferoid-notes-e2b"
     assert any("Hugging Face" in x for x in lines)
+
+
+def test_install_llama_pins_server_and_base(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    src = _llama_source(tmp_path)
+    monkeypatch.setenv("INFEROID_NOTES_SOURCE", str(src))
+    monkeypatch.setattr(notes, "LLAMA_ARCHIVE_SHA256", hashlib.sha256((src / notes.LLAMA_ARCHIVE).read_bytes()).hexdigest())
+    monkeypatch.setattr(notes, "LLAMA_BASE_SHA256", hashlib.sha256((src / notes.LLAMA_BASE).read_bytes()).hexdigest())
+    cmds = []
+
+    def fetcher(source, name, dest):
+        return notes.fetch(str(src), name, dest)
+
+    assert notes.install({"ram_gb": 24}, lambda _: None, fetcher=fetcher, run=lambda cmd: cmds.append(cmd) or 0,
+                         apps_dir=tmp_path, runtime="llama") == 0
+    cfg = notes.installed()
+    assert cfg["runtime"] == "llama" and cfg["port"] == 8090 and cfg["adapters"] == []
+    assert cfg["server"].endswith("/llama-b12600/llama-server") and cfg["base"].endswith(notes.LLAMA_BASE)
+    assert not any("mlx-lm" in part for cmd in cmds for part in cmd)
+
+
+def test_cli_accepts_llama_runtime():
+    from inferoid.cli import build_parser
+
+    args = build_parser().parse_args(["add", "notes", "--runtime", "llama"])
+    assert args.runtime == "llama"
 
 
 def _setup_env(tmp_path, monkeypatch, ram=24.0):

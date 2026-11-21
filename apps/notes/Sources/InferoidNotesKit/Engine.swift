@@ -82,8 +82,15 @@ enum Template: String, CaseIterable, Identifiable, Codable {
 /// - Ollama (default), model names like "gemma4:e4b"
 /// - an OpenAI-compatible server such as mlx_lm.server on port 8090, model names "mlx:<id>"
 enum Summarizer {
+    enum Skill { case notes, chat }
+
     static let ollama = URL(string: "http://127.0.0.1:11434")!
     static let mlx = URL(string: "http://127.0.0.1:8090")!
+    static let llama = URL(string: "http://127.0.0.1:8090")!
+
+    static func endpoint(for config: NotesConfig) -> URL {
+        URL(string: "http://127.0.0.1:\(config.port ?? 8090)")!
+    }
 
     static let system = """
     You write meeting notes from a transcript. "Me" is the person who recorded the meeting; "Them" or a calendar attendee name is everyone else on the call.
@@ -131,14 +138,16 @@ enum Summarizer {
            let list = json["models"] as? [[String: Any]] {
             names += list.compactMap { $0["name"] as? String }.sorted()
         }
-        var request = URLRequest(url: mlx.appendingPathComponent("v1/models"))
+        let managedConfig = NotesConfig.load()
+        var request = URLRequest(url: (managedConfig.map { endpoint(for: $0) } ?? mlx).appendingPathComponent("v1/models"))
         request.timeoutInterval = 1
         if let (data, _) = try? await URLSession.shared.data(for: request),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let list = json["data"] as? [[String: Any]] {
-            names += list.compactMap { $0["id"] as? String }.map { "mlx:" + $0 }
+            let prefix = managedConfig?.isLlama == true ? "llama:" : "mlx:"
+            names += list.compactMap { $0["id"] as? String }.map { prefix + $0 }
         }
-        if let managed = NotesConfig.load()?.appModel {
+        if let managed = managedConfig?.appModel {
             names.removeAll { $0 == managed }
             names.insert(managed, at: 0)
         }
@@ -146,8 +155,33 @@ enum Summarizer {
     }
 
     static func displayName(_ model: String) -> String {
-        if let c = NotesConfig.load(), model == c.appModel { return "Inferoid notes model (\(c.model.replacingOccurrences(of: "inferoid-notes-", with: "").uppercased()))" }
+        if let c = NotesConfig.load(), model == c.appModel {
+            let label = c.isLlama ? "Gemma 4 E4B" : c.model.replacingOccurrences(of: "inferoid-notes-", with: "").uppercased()
+            return "Inferoid notes model (\(label))"
+        }
         return model.hasPrefix("mlx:") ? "MLX " + (model.split(separator: "/").last.map(String.init) ?? model) : model
+    }
+
+    /// The one skill-to-adapter mapping. Adding a skill is one case here.
+    static func adapter(for skill: Skill, config: NotesConfig? = NotesConfig.load()) -> (id: Int, scale: Double)? {
+        guard let config, config.isLlama else { return nil }
+        let name = skill == .notes ? "notes" : "brain"
+        guard let id = config.adapters.firstIndex(where: { $0.name == name }) else { return nil }
+        return (id, config.adapters[id].scale)
+    }
+
+    static func llamaRequestBody(system: String, user: String, model: String, maxTokens: Int,
+                                 skill: Skill, config: NotesConfig) -> [String: Any] {
+        var body: [String: Any] = ["model": String(model.dropFirst("llama:".count)), "stream": true,
+                                    "temperature": 0.2, "max_tokens": maxTokens,
+                                    "messages": [["role": "system", "content": system], ["role": "user", "content": user]]]
+        // Always send every adapter's scale so a request never inherits another skill's adapter: the chosen one at its
+        // scale, all others at 0 (plain base when the skill has no adapter).
+        if !config.adapters.isEmpty {
+            let chosen = adapter(for: skill, config: config)
+            body["lora"] = config.adapters.indices.map { ["id": $0, "scale": $0 == chosen?.id ? chosen!.scale : 0.0] }
+        }
+        return body
     }
 
     /// The first {...} object in a reply (tolerates code fences or text around it).
@@ -163,7 +197,7 @@ enum Summarizer {
         while true {
             do {
                 return try await stream(transcript: transcript, template: template, model: model, context: context,
-                                        attendeeNames: attendeeNames, constrained: !model.hasPrefix("mlx:"), maxTokens: nil,
+                                        attendeeNames: attendeeNames, constrained: !model.hasPrefix("mlx:") && !model.hasPrefix("llama:"), maxTokens: nil,
                                         instructions: instructions, onText: onText)
             } catch let error as NSError where error.localizedDescription.contains("not valid JSON") && tries < 2 {
                 // The model broke the JSON. Try again (up to 3 in all); the transcript is cached, so this costs only the writing.
@@ -239,16 +273,18 @@ enum Summarizer {
     static func complete(system: String, user: String, model: String, maxTokens: Int = 1500, context: Int = 32768,
                          onText: (@Sendable (String) -> Void)? = nil) async throws -> String {
         try await send(system: system, user: user, model: model, context: context, format: nil,
-                       maxTokens: maxTokens, open: false, onText: onText).content
+                       maxTokens: maxTokens, open: false, onText: onText, skill: .chat).content
     }
 
     struct Sent { var content: String; var seconds: Double; var promptTokens: Int; var outputTokens: Int }
 
-    /// One streamed request to Ollama (/api/chat) or the MLX server (/v1/completions with a raw prompt).
+    /// One streamed request to Ollama (/api/chat), llama-server (/v1/chat/completions), or MLX (/v1/completions).
     /// `open` stops the prompt right after the user text (prefill only).
     private static func send(system sys: String, user: String, model: String, context: Int, format: [String: Any]?,
-                             maxTokens: Int, open: Bool, onText: (@Sendable (String) -> Void)?) async throws -> Sent {
+                               maxTokens: Int, open: Bool, onText: (@Sendable (String) -> Void)?,
+                               skill: Skill = .notes) async throws -> Sent {
         let isMLX = model.hasPrefix("mlx:")
+        let isLlama = model.hasPrefix("llama:")
         var body: [String: Any]
         var request: URLRequest
         if isMLX {
@@ -256,6 +292,9 @@ enum Summarizer {
             body = ["model": String(model.dropFirst(4)), "stream": true, "temperature": 0.2,
                     "max_tokens": maxTokens, "stream_options": ["include_usage": true], "prompt": prompt]
             request = URLRequest(url: mlx.appendingPathComponent("v1/completions"))
+        } else if isLlama, let config = NotesConfig.load() {
+            body = llamaRequestBody(system: sys, user: user, model: model, maxTokens: maxTokens, skill: skill, config: config)
+            request = URLRequest(url: endpoint(for: config).appendingPathComponent("v1/chat/completions"))
         } else {
             var options: [String: Any] = ["temperature": 0.2, "num_ctx": context]
             if open || maxTokens < 4000 { options["num_predict"] = maxTokens }
@@ -275,7 +314,7 @@ enum Summarizer {
         var content = "", promptTokens = 0, outputTokens = 0, errorText = ""
         for try await line in bytes.lines {
             var payload = Substring(line)
-            if isMLX {
+            if isMLX || isLlama {
                 guard payload.hasPrefix("data:") else { if status >= 400 { errorText += line }; continue }
                 payload = payload.dropFirst(5).drop { $0 == " " }
                 if payload == "[DONE]" { break }
@@ -286,9 +325,9 @@ enum Summarizer {
             }
             if let error = json["error"] {
                 let text = (error as? String) ?? ((error as? [String: Any])?["message"] as? String) ?? "\(error)"
-                throw fail((isMLX ? "Model server: " : "Ollama: ") + text, status)
+                throw fail(((isMLX || isLlama) ? "Model server: " : "Ollama: ") + text, status)
             }
-            if isMLX {
+            if isMLX || isLlama {
                 if let choices = json["choices"] as? [[String: Any]],
                    let piece = (choices.first?["text"] as? String) ?? ((choices.first?["delta"] as? [String: Any])?["content"] as? String) {
                     content += piece
