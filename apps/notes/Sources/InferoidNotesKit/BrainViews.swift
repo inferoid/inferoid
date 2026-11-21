@@ -283,7 +283,7 @@ struct BrainOrbitView: View {
         let position = members.firstIndex(where: { $0.entity.id == person.entity.id }) ?? 0
         let sectorWidth = (Double.pi * 2) / Double(worlds.count)
         let angle = -Double.pi / 2 + Double(sector) * sectorWidth + sectorWidth * (0.2 + 0.6 * Double(position + 1) / Double(members.count + 1))
-        return CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+        let r = Double(radius); return CGPoint(x: Double(center.x) + Foundation.cos(angle) * r, y: Double(center.y) + Foundation.sin(angle) * r)
     }
 
     private var needsYou: some View {
@@ -334,7 +334,7 @@ struct BrainOrbitView: View {
             people = try store.orbitPeople(limit: 40)
             matters = try store.matterStories()
             error = nil
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -468,7 +468,7 @@ struct BrainPersonView: View {
     }
 
     private func load() {
-        do { dossier = try BrainStore().personDossier(name) } catch { error = error.localizedDescription }
+        do { dossier = try BrainStore().personDossier(name) } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -623,7 +623,7 @@ struct BrainPromisesView: View {
                 let key = "brain.snooze.\(item.fact.id)"
                 if let value = UserDefaults.standard.object(forKey: key) as? Double { snoozed[item.fact.id] = Date(timeIntervalSince1970: value) }
             }
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -757,7 +757,7 @@ struct BrainChangesView: View {
     }
 
     private func load() {
-        do { changes = try BrainStore().changes(since: Date().addingTimeInterval(-7 * 24 * 60 * 60)) } catch { error = error.localizedDescription }
+        do { changes = try BrainStore().changes(since: Date().addingTimeInterval(-7 * 24 * 60 * 60)) } catch { self.error = error.localizedDescription }
     }
 }
 
