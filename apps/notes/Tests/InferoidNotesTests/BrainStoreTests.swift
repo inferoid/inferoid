@@ -89,4 +89,30 @@ final class BrainStoreTests: XCTestCase {
         XCTAssertEqual(hits[0].meetingDate, "2026-11-04T10:00:00Z")
         XCTAssertEqual(hits[0].fact.lineStart, 1)
     }
+
+    func testDueDateResolverHandlesSpokenPhrases() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let meeting = "2026-11-16T10:00:00Z" // Monday
+        XCTAssertEqual(calendar.component(.day, from: try XCTUnwrap(BrainDueDate.resolve("Friday", relativeTo: meeting, calendar: calendar))), 20)
+        XCTAssertEqual(calendar.component(.day, from: try XCTUnwrap(BrainDueDate.resolve("by Nov 28", relativeTo: meeting, calendar: calendar))), 28)
+        XCTAssertEqual(calendar.component(.day, from: try XCTUnwrap(BrainDueDate.resolve("next week", relativeTo: meeting, calendar: calendar))), 23)
+        XCTAssertEqual(calendar.component(.day, from: try XCTUnwrap(BrainDueDate.resolve("end of month", relativeTo: meeting, calendar: calendar))), 30)
+        XCTAssertNil(BrainDueDate.resolve("after the board decides", relativeTo: meeting, calendar: calendar))
+    }
+
+    func testOrbitPeopleAndPromiseItemsAreAggregated() async throws {
+        let payload = BrainExtractionPayload(
+            entities: [BrainExtractionEntity(name: "Ryan Green", kind: "person", world: "client"), BrainExtractionEntity(name: "Me", kind: "person")],
+            facts: [BrainExtractionFact(kind: "commitment", subject: "Me", predicate: "send draft", value: "send the draft", owner: "Me", counterparty: "Ryan Green", due: "Friday", quote: "I will send the draft Friday.", lineStart: 1, lineEnd: 1)]
+        )
+        _ = try await store.ingest(meetingFolder: root.appendingPathComponent("orbit"), startedAt: "2026-11-16T10:00:00Z", model: "fixture", attendees: ["Ryan Green"], transcript: "[00:01] Me: I will send the draft Friday.", payload: payload)
+        let people = try store.orbitPeople()
+        XCTAssertEqual(people.first(where: { $0.entity.name == "Ryan Green" })?.meetingCount, 1)
+        XCTAssertTrue(people.first(where: { $0.entity.name == "Ryan Green" })?.hasOpenPromise ?? false)
+        let promises = try store.openPromiseItems()
+        XCTAssertEqual(promises.count, 1)
+        XCTAssertEqual(promises.first?.otherPartyName, "Ryan Green")
+        XCTAssertNotNil(promises.first?.dueDate)
+    }
 }

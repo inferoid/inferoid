@@ -5,7 +5,10 @@ import SwiftUI
 /// extension's tab.
 enum Pane: Hashable {
     case home, meetings, newChat, live
+    case brainOrbit, brainPromises, brainChanges
+    case brainPerson(String), brainMatter(Int64), brainBriefing(String)
     case chat(UUID)
+    case chatDraft(UUID, String)
     case extensionTab(String)
     case meeting(String)
 }
@@ -26,6 +29,11 @@ public struct MainView: View {
                 Label("New chat", systemImage: "square.and.pencil").tag(Pane.newChat)
                 Label("Home", systemImage: "house").tag(Pane.home)
                 Label("Meetings", systemImage: "person.2.wave.2").tag(Pane.meetings)
+                Section("Brain") {
+                    Label("Orbit", systemImage: "circle.hexagongrid").tag(Pane.brainOrbit)
+                    Label("Promises", systemImage: "checklist").tag(Pane.brainPromises)
+                    Label("What changed", systemImage: "arrow.triangle.2.circlepath").tag(Pane.brainChanges)
+                }
                 ForEach(InferoidExtensions.topItems) { item in
                     Label(item.title, systemImage: item.systemImage).tag(Pane.extensionTab(item.id))
                 }
@@ -85,8 +93,15 @@ public struct MainView: View {
             switch pane ?? .home {
             case .home: HomeStatusView(pane: $pane)
             case .meetings: MeetingsView(pane: $pane)
+            case .brainOrbit: BrainOrbitView(pane: $pane)
+            case .brainPromises: BrainPromisesView(pane: $pane)
+            case .brainChanges: BrainChangesView(pane: $pane)
+            case .brainPerson(let name): BrainPersonView(name: name, pane: $pane)
+            case .brainMatter(let id): BrainMatterView(matterID: id, pane: $pane)
+            case .brainBriefing(let name): BrainBriefingView(personName: name, pane: $pane)
             case .newChat: ProgressView()
             case .chat(let id): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }).id(id)
+            case .chatDraft(let id, let draft): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }, initialDraft: draft).id(id)
             case .live: LiveMeetingView()
             case .extensionTab(let id):
                 if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }

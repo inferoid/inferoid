@@ -471,6 +471,8 @@ public final class Recorder: ObservableObject {
     @Published var askSources: [Hit] = []
     @Published var askBusy = false
     @Published var meetings: [Meeting] = []
+    @Published var brainBackfillProgress: Double?
+    @Published var brainBackfillStatus = ""
 
     func reloadMeetings() { meetings = Brain.load() }
 
@@ -478,12 +480,36 @@ public final class Recorder: ObservableObject {
     /// and reused by every extraction request; cancelling the task stops before the next meeting.
     func backfillBrain() async {
         guard !isRecording, !isWriting, let brain = try? BrainStore() else { return }
+        let total = max(1, Brain.load(root: InferoidPaths.documents).count)
+        var completed = 0
+        brainBackfillProgress = 0
+        brainBackfillStatus = "Preparing past meetings…"
         do {
             try await ModelManager.shared.ensure(model)
-            await BrainBackfill.run(model: model, store: brain)
+            await BrainBackfill.run(model: model, store: brain) { [weak self] result in
+                completed += 1
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.brainBackfillProgress = min(1, Double(completed) / Double(total))
+                    switch result {
+                    case .failed: self.brainBackfillStatus = "Skipped meeting \(completed) of \(total)"
+                    default: self.brainBackfillStatus = "Reading meeting \(completed) of \(total)…"
+                    }
+                }
+            }
+            if Task.isCancelled {
+                ModelManager.shared.idle()
+                brainBackfillProgress = nil
+                brainBackfillStatus = "Brain build cancelled."
+                return
+            }
             ModelManager.shared.idle()
+            brainBackfillProgress = nil
+            brainBackfillStatus = "Brain built from past meetings."
         } catch {
             self.error = "Brain backfill: \(error.localizedDescription)"
+            brainBackfillProgress = nil
+            brainBackfillStatus = ""
         }
     }
 
