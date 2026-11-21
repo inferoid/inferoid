@@ -243,7 +243,7 @@ public final class BrainStore: @unchecked Sendable {
         var message: UnsafeMutablePointer<Int8>?
         defer { if let message { sqlite3_free(message) } }
         guard sqlite3_exec(db, sql, nil, nil, &message) == SQLITE_OK else {
-            throw BrainStoreError.sqlite(message.map(String.init(cString:)) ?? errorMessage())
+            throw BrainStoreError.sqlite(message.map { String(cString: $0) } ?? errorMessage())
         }
     }
 
