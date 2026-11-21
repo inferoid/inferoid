@@ -505,7 +505,7 @@ public final class BrainStore: @unchecked Sendable {
                     try bind(predicate, at: 4, to: invalidate); try bind(factID, at: 5, to: invalidate); try step(invalidate)
                 }
             }
-            BrainEpisode(id: episodeID, meetingFolder: meetingFolder.path, startedAt: startedAt, processedAt: now, model: model)
+            return BrainEpisode(id: episodeID, meetingFolder: meetingFolder.path, startedAt: startedAt, processedAt: now, model: model)
         }
     }
 
