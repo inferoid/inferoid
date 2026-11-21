@@ -115,4 +115,15 @@ final class BrainStoreTests: XCTestCase {
         XCTAssertEqual(promises.first?.otherPartyName, "Ryan Green")
         XCTAssertNotNil(promises.first?.dueDate)
     }
+
+    func testManuallyAddedPersonAppearsInOrbitWithoutDuplicates() throws {
+        let first = try store.addPerson(name: "Priya Shah", world: .client, summary: "CEO, Northwind Bakery", email: "priya@northwind.com")
+        let again = try store.addPerson(name: "priya shah", world: .client)
+        XCTAssertEqual(first, again)
+        let people = try store.orbitPeople()
+        XCTAssertEqual(people.filter { $0.entity.name == "Priya Shah" }.count, 1)
+        XCTAssertEqual(people.first { $0.entity.name == "Priya Shah" }?.entity.world, .client)
+        XCTAssertEqual(people.first { $0.entity.name == "Priya Shah" }?.entity.summary, "CEO, Northwind Bakery")
+        XCTAssertThrowsError(try store.addPerson(name: "  ", world: .team))
+    }
 }
