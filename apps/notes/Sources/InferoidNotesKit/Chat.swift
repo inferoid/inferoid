@@ -310,6 +310,7 @@ struct ChatView: View {
     @ObservedObject var store = ChatStore.shared
     let threadID: UUID
     var openMeeting: (String) -> Void
+    var initialDraft: String? = nil
     @State private var draft = ""
 
     var body: some View {
@@ -366,7 +367,10 @@ struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle(thread?.title ?? "Chat")
-        .onAppear { rec.reloadMeetings() }
+        .onAppear {
+            if let initialDraft, draft.isEmpty { draft = initialDraft }
+            rec.reloadMeetings()
+        }
     }
 
     private func send() {

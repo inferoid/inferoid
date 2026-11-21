@@ -5,7 +5,10 @@ import SwiftUI
 /// extension's tab.
 enum Pane: Hashable {
     case home, meetings, newChat, live
+    case brainOrbit, brainPromises, brainChanges
+    case brainPerson(String), brainMatter(Int64), brainBriefing(String)
     case chat(UUID)
+    case chatDraft(UUID, String)
     case extensionTab(String)
     case meeting(String)
 }
@@ -20,12 +23,44 @@ public struct MainView: View {
 
     public init() {}
 
+    private var brainSection: some View {
+        Section("Brain") {
+            Label("Orbit", systemImage: "circle.hexagongrid").tag(Pane.brainOrbit)
+            Label("Promises", systemImage: "checklist").tag(Pane.brainPromises)
+            Label("What changed", systemImage: "arrow.triangle.2.circlepath").tag(Pane.brainChanges)
+        }
+    }
+
+    /// The detail pane for the sidebar selection (split out so the compiler can type-check `body` quickly).
+    @ViewBuilder
+    private func detailView(for selected: Pane) -> some View {
+            switch selected {
+            case .home: HomeStatusView(pane: $pane)
+            case .meetings: MeetingsView(pane: $pane)
+            case .brainOrbit: BrainOrbitView(pane: $pane)
+            case .brainPromises: BrainPromisesView(pane: $pane)
+            case .brainChanges: BrainChangesView(pane: $pane)
+            case .brainPerson(let name): BrainPersonView(pane: $pane, name: name)
+            case .brainMatter(let id): BrainMatterView(pane: $pane, matterID: id)
+            case .brainBriefing(let name): BrainBriefingView(pane: $pane, personName: name)
+            case .newChat: ProgressView()
+            case .chat(let id): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }).id(id)
+            case .chatDraft(let id, let draft): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }, initialDraft: draft).id(id)
+            case .live: LiveMeetingView()
+            case .extensionTab(let id):
+                if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }
+            case .meeting(let id):
+                if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { MeetingsView(pane: $pane) }
+            }
+    }
+
     public var body: some View {
         NavigationSplitView {
             List(selection: $pane) {
                 Label("New chat", systemImage: "square.and.pencil").tag(Pane.newChat)
                 Label("Home", systemImage: "house").tag(Pane.home)
                 Label("Meetings", systemImage: "person.2.wave.2").tag(Pane.meetings)
+                brainSection
                 ForEach(InferoidExtensions.topItems) { item in
                     Label(item.title, systemImage: item.systemImage).tag(Pane.extensionTab(item.id))
                 }
@@ -82,17 +117,7 @@ public struct MainView: View {
                 .padding(.horizontal, 8).padding(.bottom, 10)
             }
         } detail: {
-            switch pane ?? .home {
-            case .home: HomeStatusView(pane: $pane)
-            case .meetings: MeetingsView(pane: $pane)
-            case .newChat: ProgressView()
-            case .chat(let id): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }).id(id)
-            case .live: LiveMeetingView()
-            case .extensionTab(let id):
-                if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }
-            case .meeting(let id):
-                if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { MeetingsView(pane: $pane) }
-            }
+            detailView(for: pane ?? .home)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

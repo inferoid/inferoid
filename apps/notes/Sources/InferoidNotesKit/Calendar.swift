@@ -9,9 +9,28 @@ struct MeetingCalendarContext {
     }
 }
 
+struct MeetingCalendarEvent {
+    let title: String
+    let startDate: Date
+    let endDate: Date
+    let attendeeNames: [String]
+}
+
 /// Calendar is queried locally through EventKit. Google Calendar events already
 /// appear here when the user has added that account to macOS Calendar.
 enum MeetingCalendar {
+    static func upcomingEvent(within minutes: Int = 15, now: Date = Date()) async -> MeetingCalendarEvent? {
+        let store = EKEventStore()
+        guard await requestAccess(to: store) else { return nil }
+        let end = now.addingTimeInterval(TimeInterval(max(1, minutes)) * 60)
+        let events = store.events(matching: store.predicateForEvents(withStart: now, end: end, calendars: nil))
+            .filter { !$0.isAllDay && $0.startDate >= now && $0.startDate <= end }
+            .sorted { $0.startDate < $1.startDate }
+        guard let event = events.first else { return nil }
+        return MeetingCalendarEvent(title: event.title ?? "Calendar event", startDate: event.startDate, endDate: event.endDate,
+                                    attendeeNames: names(for: event))
+    }
+
     static func currentContext(at now: Date = Date()) async -> MeetingCalendarContext {
         let store = EKEventStore()
         guard await requestAccess(to: store) else { return MeetingCalendarContext(attendeeNames: []) }
@@ -23,18 +42,21 @@ enum MeetingCalendar {
             .sorted { $0.endDate.timeIntervalSince($0.startDate) < $1.endDate.timeIntervalSince($1.startDate) }
         guard let event = events.first else { return MeetingCalendarContext(attendeeNames: []) }
 
+        return MeetingCalendarContext(attendeeNames: names(for: event))
+    }
+
+    private static func names(for event: EKEvent) -> [String] {
         var seen = Set<String>()
         // A Google calendar added to macOS is titled with its account address; skip that guest too in case
         // EventKit does not mark them as the current user.
         let own = Set([event.calendar?.title, event.calendar?.source?.title].compactMap { $0?.lowercased() })
-        let names = (event.attendees ?? []).compactMap { participant -> String? in
+        return (event.attendees ?? []).compactMap { participant -> String? in
             guard !participant.isCurrentUser,
                   !own.contains(address(participant.url)),
                   let name = displayName(name: participant.name, url: participant.url),
                   seen.insert(name).inserted else { return nil }
             return name
         }
-        return MeetingCalendarContext(attendeeNames: names)
     }
 
     static func address(_ url: URL?) -> String {

@@ -134,6 +134,46 @@ public struct BrainConflictSearch: Codable, Hashable, Sendable {
     public init(entities: [BrainEntity], facts: [BrainFact]) { self.entities = entities; self.facts = facts }
 }
 
+public struct BrainOrbitPerson: Codable, Hashable, Sendable {
+    public let entity: BrainEntity
+    public let meetingCount: Int
+    public let lastMet: String?
+    public let hasOpenPromise: Bool
+    public let hasChanged: Bool
+
+    public init(entity: BrainEntity, meetingCount: Int, lastMet: String?, hasOpenPromise: Bool, hasChanged: Bool) {
+        self.entity = entity; self.meetingCount = meetingCount; self.lastMet = lastMet
+        self.hasOpenPromise = hasOpenPromise; self.hasChanged = hasChanged
+    }
+}
+
+public struct BrainPromiseItem: Codable, Hashable, Sendable {
+    public let fact: BrainFact
+    public let episode: BrainEpisode?
+    public let dueDate: Date?
+    public let iOwe: Bool
+    public let otherPartyName: String?
+
+    public init(fact: BrainFact, episode: BrainEpisode?, dueDate: Date?, iOwe: Bool, otherPartyName: String?) {
+        self.fact = fact; self.episode = episode; self.dueDate = dueDate; self.iOwe = iOwe; self.otherPartyName = otherPartyName
+    }
+
+    public init(fact: BrainFact, episode: BrainEpisode?, dueDate: Date?) {
+        self.init(fact: fact, episode: episode, dueDate: dueDate, iOwe: false, otherPartyName: nil)
+    }
+}
+
+public struct BrainMatterStory: Codable, Hashable, Sendable {
+    public let matter: BrainEntity
+    public let parties: [BrainEntity]
+    public let facts: [BrainFact]
+    public let episodes: [BrainEpisode]
+
+    public init(matter: BrainEntity, parties: [BrainEntity], facts: [BrainFact], episodes: [BrainEpisode]) {
+        self.matter = matter; self.parties = parties; self.facts = facts; self.episodes = episodes
+    }
+}
+
 public struct BrainExtractionEntity: Codable, Hashable, Sendable {
     public var name: String
     public var kind: String
@@ -594,12 +634,109 @@ public final class BrainStore: @unchecked Sendable {
                                   positions: positions, positionHistory: history, meetings: meetings)
     }
 
+    public func factsForPerson(_ name: String) throws -> [BrainFact] {
+        lock.lock(); defer { lock.unlock() }
+        guard let id = try entityID(matching: name, kind: .person) else { return [] }
+        return try queryFacts("status <> 'forgotten' AND (subject_id = ? OR object_id = ? OR owner_id = ? OR counterparty_id = ?)", ids: [id, id, id, id])
+    }
+
+    /// People ranked by durable meeting activity. The limit keeps Orbit legible even for a large archive.
+    public func orbitPeople(limit: Int = 40, now: Date = Date()) throws -> [BrainOrbitPerson] {
+        lock.lock(); defer { lock.unlock() }
+        let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-7 * 24 * 60 * 60))
+        let statement = try prepare("""
+            SELECT e.id, e.kind, e.name, e.world, e.summary, e.created_at, e.updated_at, e.forgotten,
+                   COUNT(DISTINCT ep.id), MAX(ep.started_at),
+                   EXISTS(SELECT 1 FROM facts p WHERE p.invalidated_at IS NULL AND p.done = 0 AND p.status <> 'forgotten'
+                          AND (p.owner_id = e.id OR p.counterparty_id = e.id)),
+                   EXISTS(SELECT 1 FROM facts c WHERE c.kind = 'position' AND c.status <> 'forgotten'
+                          AND (c.valid_from >= ? OR c.invalidated_at >= ?)
+                          AND (c.subject_id = e.id OR c.object_id = e.id OR c.owner_id = e.id OR c.counterparty_id = e.id))
+            FROM entities e
+            LEFT JOIN facts f ON (f.subject_id = e.id OR f.object_id = e.id OR f.owner_id = e.id OR f.counterparty_id = e.id)
+            LEFT JOIN episodes ep ON ep.id = f.episode_id
+            WHERE e.kind = 'person' AND e.forgotten = 0
+            GROUP BY e.id ORDER BY COUNT(DISTINCT ep.id) DESC, MAX(ep.started_at) DESC, e.name LIMIT ?
+        """)
+        defer { sqlite3_finalize(statement) }
+        try bind(since, at: 1, to: statement); try bind(since, at: 2, to: statement); try bind(Int64(max(1, limit)), at: 3, to: statement)
+        var result: [BrainOrbitPerson] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let person = entity(statement)
+            result.append(BrainOrbitPerson(entity: person, meetingCount: Int(sqlite3_column_int(statement, 8)),
+                                           lastMet: optionalText(statement, 9), hasOpenPromise: sqlite3_column_int(statement, 10) != 0,
+                                           hasChanged: sqlite3_column_int(statement, 11) != 0))
+        }
+        return result
+    }
+
+    public func openPromiseItems(me: String = "Me", now: Date = Date()) throws -> [BrainPromiseItem] {
+        lock.lock(); defer { lock.unlock() }
+        guard let id = try entityID(matching: me, kind: .person) else { return [] }
+        let facts = try queryFacts("kind = 'commitment' AND invalidated_at IS NULL AND done = 0 AND status <> 'forgotten' AND (owner_id = ? OR counterparty_id = ?)", ids: [id, id])
+        return facts.map { fact in
+            let episode = try? queryEpisode(id: fact.episodeID)
+            let iOwe = fact.ownerID == id
+            let otherID = iOwe ? fact.counterpartyID : fact.ownerID
+            let otherName = otherID.flatMap { (try? queryEntity(id: $0)) ?? nil }?.name
+            return BrainPromiseItem(fact: fact, episode: episode ?? nil,
+                                    dueDate: BrainDueDate.resolve(fact.due, relativeTo: episode?.startedAt ?? fact.validFrom),
+                                    iOwe: iOwe, otherPartyName: otherName)
+        }.sorted {
+            switch ($0.dueDate, $1.dueDate) {
+            case let (left?, right?): return left < right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return $0.fact.validFrom > $1.fact.validFrom
+            }
+        }
+    }
+
+    public func matterStories() throws -> [BrainMatterStory] {
+        lock.lock(); defer { lock.unlock() }
+        let statement = try prepare("SELECT id, kind, name, world, summary, created_at, updated_at, forgotten FROM entities WHERE kind = 'matter' AND forgotten = 0 ORDER BY name")
+        defer { sqlite3_finalize(statement) }
+        var result: [BrainMatterStory] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let matter = entity(statement)
+            let facts = try queryFacts("status <> 'forgotten' AND (subject_id = ? OR object_id = ? OR owner_id = ? OR counterparty_id = ?)", ids: [matter.id, matter.id, matter.id, matter.id])
+            var partyIDs = Set<Int64>()
+            for fact in facts {
+                for value in [fact.subjectID, fact.objectID, fact.ownerID, fact.counterpartyID].compactMap({ $0 }) where value != matter.id { partyIDs.insert(value) }
+            }
+            let parties = try partyIDs.sorted().compactMap { try queryEntity(id: $0) }
+            let episodeIDs = Set(facts.map(\.episodeID))
+            let episodes = try episodeIDs.sorted().compactMap { try queryEpisode(id: $0) }.sorted { $0.startedAt < $1.startedAt }
+            result.append(BrainMatterStory(matter: matter, parties: parties, facts: facts, episodes: episodes))
+        }
+        return result
+    }
+
+    public func episode(id: String) throws -> BrainEpisode? {
+        lock.lock(); defer { lock.unlock() }
+        return try queryEpisode(id: id)
+    }
+
     public func openPromises(me: String = "Me") throws -> BrainPromises {
         lock.lock(); defer { lock.unlock() }
         guard let id = try entityID(matching: me, kind: .person) else { return BrainPromises(iOwe: [], owedToMe: []) }
         let facts = try queryFacts("kind = 'commitment' AND invalidated_at IS NULL AND done = 0 AND status <> 'forgotten' AND (owner_id = ? OR counterparty_id = ?)", ids: [id, id])
-        return BrainPromises(iOwe: facts.filter { $0.ownerID == id }.sorted { ($0.due ?? "zzzz") < ($1.due ?? "zzzz") },
-                             owedToMe: facts.filter { $0.counterpartyID == id }.sorted { ($0.due ?? "zzzz") < ($1.due ?? "zzzz") })
+        func sortedByDue(_ values: [BrainFact]) -> [BrainFact] {
+            values.sorted { left, right in
+                let leftEpisode = (try? queryEpisode(id: left.episodeID)) ?? nil
+                let rightEpisode = (try? queryEpisode(id: right.episodeID)) ?? nil
+                let leftDate = BrainDueDate.resolve(left.due, relativeTo: leftEpisode?.startedAt ?? left.validFrom)
+                let rightDate = BrainDueDate.resolve(right.due, relativeTo: rightEpisode?.startedAt ?? right.validFrom)
+                switch (leftDate, rightDate) {
+                case let (a?, b?): return a < b
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return left.validFrom > right.validFrom
+                }
+            }
+        }
+        return BrainPromises(iOwe: sortedByDue(facts.filter { $0.ownerID == id }),
+                             owedToMe: sortedByDue(facts.filter { $0.counterpartyID == id }))
     }
 
     public func changes(since date: Date) throws -> [BrainFact] {
@@ -697,6 +834,14 @@ public final class BrainStore: @unchecked Sendable {
 
     private func queryFact(id: Int64) throws -> BrainFact? {
         let statement = try prepare(Self.factSQL + " WHERE f.id = ?"); defer { sqlite3_finalize(statement) }; try bind(id, at: 1, to: statement); guard sqlite3_step(statement) == SQLITE_ROW else { return nil }; return fact(statement)
+    }
+
+    private func queryEpisode(id: String) throws -> BrainEpisode? {
+        let statement = try prepare("SELECT id, meeting_folder, started_at, processed_at, model FROM episodes WHERE id = ?")
+        defer { sqlite3_finalize(statement) }; try bind(id, at: 1, to: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return BrainEpisode(id: text(statement, 0), meetingFolder: text(statement, 1), startedAt: text(statement, 2),
+                            processedAt: optionalText(statement, 3), model: optionalText(statement, 4))
     }
 
     private func queryFacts(_ whereClause: String, ids: [Int64] = [], strings: [String] = []) throws -> [BrainFact] {
