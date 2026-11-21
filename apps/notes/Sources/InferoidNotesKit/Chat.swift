@@ -119,6 +119,10 @@ public final class ChatStore: ObservableObject {
         error = nil
         let history = before.messages
         let hits = Brain.search(question, in: meetings, limit: 4)
+        let brainFacts: [BrainFactHit] = {
+            guard let brain = try? BrainStore() else { return [] }
+            return (try? brain.factsForChat(question, limit: 8)) ?? []
+        }()
         let reply = ChatMessage(role: "assistant", text: "", sources: hits.map { $0.meeting.id })
         update(id) { t in
             if t.messages.isEmpty { t.title = String(question.prefix(60)) }
@@ -127,7 +131,7 @@ public final class ChatStore: ObservableObject {
         }
         busyThread = id
         let system = Self.systemPrompt(tools: InferoidExtensions.chatTools)
-        let user = Self.userPrompt(question: question, history: history, hits: hits)
+        let user = Self.userPrompt(question: question, history: history, hits: hits, brainFacts: brainFacts)
         let replyID = reply.id
         task = Task { @MainActor in
             do {
@@ -227,7 +231,7 @@ public final class ChatStore: ObservableObject {
         return s
     }
 
-    static func userPrompt(question: String, history: [ChatMessage], hits: [Hit]) -> String {
+    static func userPrompt(question: String, history: [ChatMessage], hits: [Hit], brainFacts: [BrainFactHit] = []) -> String {
         var s = ""
         let recent = history.suffix(8)
         if !recent.isEmpty {
@@ -240,6 +244,17 @@ public final class ChatStore: ObservableObject {
         }
         if !hits.isEmpty {
             s += "Meeting excerpts that may help:\n" + Brain.context(for: question, hits: hits, budget: 12_000) + "\n"
+        }
+        if !brainFacts.isEmpty {
+            s += "Brain facts (durable extracted facts; cite meeting date and line when using one):\n"
+            for hit in brainFacts {
+                let fact = hit.fact
+                let status = fact.status == "verified" ? "verified" : "unverified"
+                s += "- [\(hit.meetingDate), \(hit.line), \(status)] \(fact.predicate): \(fact.value)"
+                if !fact.quote.isEmpty { s += " — \"\(fact.quote)\"" }
+                s += "\n"
+            }
+            s += "\n"
         }
         if let fact = letterCountFact(question) { s += fact + "\n" }
         s += "User: " + question

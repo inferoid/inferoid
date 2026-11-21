@@ -402,6 +402,10 @@ public final class Recorder: ObservableObject {
             savedFolder = try? Store.save(started: started, lines: lines, notes: notes,
                                           meta: ["template": template.rawValue, "duration_s": Int(elapsed), "short": true],
                                           attendeeNames: attendeeNames)
+            if let folder = savedFolder, let brain = try? BrainStore() {
+                let startedText = ISO8601DateFormatter().string(from: started)
+                try? brain.markSkipped(meetingFolder: folder, startedAt: startedText)
+            }
             reloadMeetings()
             return
         }
@@ -447,8 +451,17 @@ public final class Recorder: ObservableObject {
         savedFolder = try? Store.save(started: started, lines: lines, notes: notes, meta: meta, attendeeNames: attendeeNames)
         if notes != nil, Prefs.shared.askFeedback { feedbackFor = savedFolder }
         reloadMeetings()
-        ModelManager.shared.idle()
         isWriting = false
+        // Feed the Brain after the notes are on screen, reusing the notes model while it is still loaded.
+        if let folder = savedFolder, let brain = try? BrainStore() {
+            let model = model
+            Task { @MainActor in
+                _ = await BrainExtraction.process(folder: folder, model: model, store: brain)
+                ModelManager.shared.idle()
+            }
+        } else {
+            ModelManager.shared.idle()
+        }
     }
 
     // MARK: - Ask (private brain)
@@ -460,6 +473,19 @@ public final class Recorder: ObservableObject {
     @Published var meetings: [Meeting] = []
 
     func reloadMeetings() { meetings = Brain.load() }
+
+    /// Runs the one-at-a-time brain backfill after the caller has opened the vault. The notes model is loaded once
+    /// and reused by every extraction request; cancelling the task stops before the next meeting.
+    func backfillBrain() async {
+        guard !isRecording, !isWriting, let brain = try? BrainStore() else { return }
+        do {
+            try await ModelManager.shared.ensure(model)
+            await BrainBackfill.run(model: model, store: brain)
+            ModelManager.shared.idle()
+        } catch {
+            self.error = "Brain backfill: \(error.localizedDescription)"
+        }
+    }
 
     var searchHits: [Hit] { Brain.search(askQuery, in: meetings) }
 
