@@ -33,6 +33,8 @@ struct NotesAdapter: Decodable, Equatable {
     var sha256: String
     var scale: Double
 
+    private enum CodingKeys: String, CodingKey { case name, file, sha256, scale }
+
     init(name: String, file: String, sha256: String = "", scale: Double = 1.0) {
         self.name = name; self.file = file; self.sha256 = sha256; self.scale = scale
     }
