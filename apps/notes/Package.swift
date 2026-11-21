@@ -14,7 +14,8 @@ let package = Package(
         .target(
             name: "InferoidNotesKit",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
-            path: "Sources/InferoidNotesKit"
+            path: "Sources/InferoidNotesKit",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
             name: "InferoidNotes",
@@ -24,7 +25,8 @@ let package = Package(
         .testTarget(
             name: "InferoidNotesTests",
             dependencies: ["InferoidNotesKit"],
-            path: "Tests/InferoidNotesTests"
+            path: "Tests/InferoidNotesTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

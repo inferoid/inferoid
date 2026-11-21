@@ -1,0 +1,3 @@
+```json
+{"entities":[{"name":"Ryan Green","kind":"person","world":"client","email":"ryan.green@x.com"}],"facts":[{"kind":"position","subject":"Ryan Green","predicate":"budget","value":"Ryan supports the smaller budget","quote":"Ryan supports the smaller budget.","line_start":1,"line_end":1}]}
+```
