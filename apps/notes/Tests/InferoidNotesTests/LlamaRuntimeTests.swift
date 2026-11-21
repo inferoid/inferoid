@@ -29,25 +29,29 @@ final class LlamaRuntimeTests: XCTestCase {
     }
 
     func testLlamaRequestUsesBaseWhenSkillAdapterIsMissing() {
-        let c = NotesConfig(model: "gemma-4", base: "/tmp/base.gguf", runtime: "llama",
+        let c = NotesConfig(model: "gemma-4", runtime: "llama", base: "/tmp/base.gguf",
                             adapters: [NotesAdapter(name: "brain", file: "/tmp/brain.gguf", scale: 0.7)])
         let body = Summarizer.llamaRequestBody(system: "s", user: "u", model: c.appModel,
                                                maxTokens: 10, skill: .notes, config: c)
-        let lora = body["lora"] as? [[String: Any]]
-        XCTAssertEqual(lora?.count, 1)
-        XCTAssertEqual(lora?.first?["scale"] as? Double, 0.0)  // brain adapter explicitly off
+        let lora: [[String: Any]] = body["lora"] as? [[String: Any]] ?? []
+        XCTAssertEqual(lora.count, 1)
+        let brainScale: Double? = lora[0]["scale"] as? Double
+        XCTAssertEqual(brainScale, 0)  // brain adapter explicitly off
     }
 
     func testLlamaRequestSelectsTheSkillAdapter() {
-        let c = NotesConfig(model: "gemma-4", base: "/tmp/base.gguf", runtime: "llama",
+        let c = NotesConfig(model: "gemma-4", runtime: "llama", base: "/tmp/base.gguf",
                             adapters: [NotesAdapter(name: "brain", file: "/tmp/brain.gguf", scale: 0.7),
                                        NotesAdapter(name: "notes", file: "/tmp/notes.gguf", scale: 0.9)])
         let body = Summarizer.llamaRequestBody(system: "s", user: "u", model: c.appModel,
                                                maxTokens: 10, skill: .notes, config: c)
-        let lora = body["lora"] as? [[String: Any]]
-        XCTAssertEqual(lora?.count, 2)
-        XCTAssertEqual(lora?[0]["scale"] as? Double, 0.0)   // brain off
-        XCTAssertEqual(lora?[1]["id"] as? Int, 1)
-        XCTAssertEqual(lora?[1]["scale"] as? Double, 0.9)   // notes on
+        let lora: [[String: Any]] = body["lora"] as? [[String: Any]] ?? []
+        XCTAssertEqual(lora.count, 2)
+        let brainScale: Double? = lora[0]["scale"] as? Double
+        let notesID: Int? = lora[1]["id"] as? Int
+        let notesScale: Double? = lora[1]["scale"] as? Double
+        XCTAssertEqual(brainScale, 0)    // brain off
+        XCTAssertEqual(notesID, 1)
+        XCTAssertEqual(notesScale, 0.9)  // notes on
     }
 }
