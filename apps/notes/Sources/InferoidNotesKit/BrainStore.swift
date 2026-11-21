@@ -605,6 +605,38 @@ public final class BrainStore: @unchecked Sendable {
         return id
     }
 
+    /// Adds a person the user typed in, no meeting needed. A person already known by that name is updated instead of
+    /// duplicated. The name (and email, if given) become aliases so meetings later resolve to this person.
+    @discardableResult
+    public func addPerson(name: String, world: BrainWorld, summary: String = "", email: String? = nil) throws -> Int64 {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { throw BrainStoreError.malformed("A person needs a name.") }
+        let note = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mail = (email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.lock(); defer { lock.unlock() }
+        return try withTransaction { () throws -> Int64 in
+            let now = Self.now()
+            let id: Int64
+            if let existing = try entityID(matching: clean, kind: .person) {
+                let update = try prepare("UPDATE entities SET world = ?, summary = CASE WHEN ? = '' THEN summary ELSE ? END, updated_at = ? WHERE id = ?")
+                defer { sqlite3_finalize(update) }
+                try bind(world.rawValue, at: 1, to: update); try bind(note, at: 2, to: update); try bind(note, at: 3, to: update)
+                try bind(now, at: 4, to: update); try bind(existing, at: 5, to: update); try step(update)
+                id = existing
+            } else {
+                let insert = try prepare("INSERT INTO entities(kind, name, world, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+                defer { sqlite3_finalize(insert) }
+                try bind(BrainEntityKind.person.rawValue, at: 1, to: insert); try bind(clean, at: 2, to: insert)
+                try bind(world.rawValue, at: 3, to: insert); try bind(note, at: 4, to: insert)
+                try bind(now, at: 5, to: insert); try bind(now, at: 6, to: insert); try step(insert)
+                id = sqlite3_last_insert_rowid(db)
+                try insertAlias(id, value: clean, source: "manual")
+            }
+            if !mail.isEmpty { try insertAlias(id, value: mail, source: "manual") }
+            return id
+        }
+    }
+
     private func insertAlias(_ entityID: Int64, value: String, source: String) throws {
         let display = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let norm = Self.normalize(display)

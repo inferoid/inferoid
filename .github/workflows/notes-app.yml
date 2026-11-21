@@ -2,7 +2,7 @@ name: notes-app
 # Builds the Inferoid Mac app on a GitHub Mac, so nobody needs Xcode. Tag notes-v* to publish a release.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
     tags: ["notes-v*"]
     paths: ["apps/notes/**", ".github/workflows/notes-app.yml"]
   pull_request:

@@ -1,16 +1,26 @@
+import AppKit
 import Darwin
 import SwiftUI
 
 private enum BrainUI {
-    static let page = Color(red: 0.94, green: 0.945, blue: 0.96)
-    static let panel = Color(red: 0.985, green: 0.985, blue: 0.99)
-    static let ink = Color(red: 0.08, green: 0.09, blue: 0.10)
-    static let muted = Color(red: 0.30, green: 0.33, blue: 0.38)
-    static let blue = Color(red: 0.12, green: 0.30, blue: 0.72)
-    static let teal = Color(red: 0.04, green: 0.42, blue: 0.39)
-    static let orange = Color(red: 0.62, green: 0.25, blue: 0.06)
-    static let purple = Color(red: 0.32, green: 0.22, blue: 0.58)
-    static let green = Color(red: 0.19, green: 0.38, blue: 0.16)
+    // System colours so every screen reads correctly in light and dark mode.
+    static let page = Color(nsColor: .windowBackgroundColor)
+    static let panel = Color(nsColor: .controlBackgroundColor)
+    static let ink = Color(nsColor: .labelColor)
+    static let muted = Color(nsColor: .secondaryLabelColor)
+    static let blue = adaptive(light: (0.12, 0.30, 0.72), dark: (0.45, 0.62, 1.0))
+    static let teal = adaptive(light: (0.04, 0.42, 0.39), dark: (0.30, 0.78, 0.72))
+    static let orange = adaptive(light: (0.62, 0.25, 0.06), dark: (0.98, 0.60, 0.36))
+    static let purple = adaptive(light: (0.32, 0.22, 0.58), dark: (0.70, 0.60, 0.98))
+    static let green = adaptive(light: (0.19, 0.38, 0.16), dark: (0.50, 0.80, 0.45))
+
+    static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let c = isDark ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
+    }
 
     static func color(for world: BrainWorld) -> Color {
         switch world {
@@ -140,6 +150,7 @@ struct BrainOrbitView: View {
     @State private var world: BrainWorld?
     @State private var upcoming: MeetingCalendarEvent?
     @State private var error: String?
+    @State private var addingPerson = false
 
     private var visiblePeople: [BrainOrbitPerson] {
         people.filter { world == nil || $0.entity.world == world }
@@ -154,12 +165,20 @@ struct BrainOrbitView: View {
                         Text("People and matters arranged by the attention they need.").foregroundStyle(BrainUI.muted)
                     }
                     Spacer()
+                    Button { addingPerson = true } label: { Label("Add person", systemImage: "person.badge.plus") }
                     StoredLocally()
                 }
                 worldFilters
                 if people.isEmpty && matters.isEmpty {
-                    BrainBuildCard()
-                    BrainEmptyState(title: "Your Brain is empty", message: "Record a few meetings, or build it from the meetings already saved on this Mac.")
+                    BrainCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Add the people you work with", systemImage: "person.crop.circle.badge.plus").font(.headline)
+                            Text("Clients, opposing counsel, your team, family: each goes in its own world. Meetings with them will fill in the rest.")
+                                .foregroundStyle(BrainUI.muted)
+                            Button("Add person") { addingPerson = true }.buttonStyle(.borderedProminent)
+                        }
+                    }
+                    if !rec.meetings.isEmpty { BrainBuildCard() }
                 } else {
                     orbit
                     needsYou
@@ -178,6 +197,7 @@ struct BrainOrbitView: View {
         }
         .background(BrainUI.page)
         .navigationTitle("Brain · Orbit")
+        .sheet(isPresented: $addingPerson, onDismiss: { load() }) { AddPersonSheet(world: world ?? .client) }
         .task { load() }
         .task {
             upcoming = await MeetingCalendar.upcomingEvent(within: 30)
@@ -840,6 +860,56 @@ struct BrainMatterView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+
+/// Adds a person by hand: name, world, who they are, email. Saved only on this Mac.
+struct AddPersonSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var world: BrainWorld
+    @State private var name = ""
+    @State private var summary = ""
+    @State private var email = ""
+    @State private var error: String?
+
+    private let worlds: [BrainWorld] = [.client, .opposing, .court, .team, .personal, .other]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add person").font(.title2.bold())
+            Form {
+                TextField("Name", text: $name)
+                Picker("World", selection: $world) {
+                    ForEach(worlds, id: \.self) { item in Text(item.rawValue.capitalized).tag(item) }
+                }
+                TextField("Who they are (role, company, what they care about)", text: $summary, axis: .vertical)
+                    .lineLimit(2...4)
+                TextField("Email (optional, links calendar invites to them)", text: $email)
+            }
+            .formStyle(.grouped)
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            HStack {
+                StoredLocally()
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Add") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private func save() {
+        do {
+            try BrainStore().addPerson(name: name, world: world, summary: summary, email: email.isEmpty ? nil : email)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 }
