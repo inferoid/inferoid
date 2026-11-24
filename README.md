@@ -4,6 +4,19 @@
 
 On 23 held-out synthetic business calls, our 4B notes model made **3.0 mistakes per call; Claude Opus 5.5 made 3.2** ([results and models](https://huggingface.co/Inferoid/inferoid-notes-e4b)).
 
+## Screenshots
+
+![Orbit: the people in your life, by how close they are](docs/screenshots/orbit.png)
+
+| | |
+|---|---|
+| ![Library: books saved by link, with covers](docs/screenshots/library-books.png) | ![Library: media, movies and videos](docs/screenshots/library-media.png) |
+| **Library:** paste a link to a book, article, movie or video; Inferoid fetches the cover and details. | **Media:** movies, shows, YouTube, podcasts and talks in one place. |
+| ![Projects: chats and files around one project](docs/screenshots/projects.png) | ![Routines: scheduled prompts like a morning brief](docs/screenshots/routines.png) |
+| **Projects:** instructions, files and chats for one piece of work. | **Routines:** a morning brief, weekly reflection and keep-in-touch reminders, run on your Mac. |
+| ![Library: saved articles](docs/screenshots/library-articles.png) | ![Travels: your trips](docs/screenshots/travels.png) |
+| **Articles:** saved reading the assistant can draw on. | **Travels:** trips your assistant knows about. |
+
 ## Free for life for beta testers
 
 Everyone who joins the beta gets Inferoid **free for life**: the app, the on-device models and every model update. We will only charge for things that cost us money to run, like cloud processing and business features (SSO, team workflows). Get the app at [inferoid.com/download](https://inferoid.com/download).
@@ -239,4 +252,4 @@ Tests use synthetic fixture logs created in the test suite. Real session content
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE). Releases before November 25, 2026 were published under Apache 2.0 and stay available under that license in [inferoid/inferoid-legacy](https://github.com/inferoid/inferoid-legacy).
+[GNU Affero General Public License v3.0](LICENSE).
