@@ -138,7 +138,7 @@ enum Summarizer {
            let list = json["models"] as? [[String: Any]] {
             names += list.compactMap { $0["name"] as? String }.sorted()
         }
-        let managedConfig = NotesConfig.load()
+        let managedConfig = NotesConfig.load().flatMap { $0.isInkling ? nil : $0 }
         var request = URLRequest(url: (managedConfig.map { endpoint(for: $0) } ?? mlx).appendingPathComponent("v1/models"))
         request.timeoutInterval = 1
         if let (data, _) = try? await URLSession.shared.data(for: request),
@@ -147,7 +147,7 @@ enum Summarizer {
             let prefix = managedConfig?.isLlama == true ? "llama:" : "mlx:"
             names += list.compactMap { $0["id"] as? String }.map { prefix + $0 }
         }
-        if let managed = managedConfig?.appModel {
+        if let managed = NotesConfig.defaultModel {
             names.removeAll { $0 == managed }
             names.insert(managed, at: 0)
         }
@@ -155,6 +155,7 @@ enum Summarizer {
     }
 
     static func displayName(_ model: String) -> String {
+        if model.hasPrefix("inkling:") { return "Inkling 2 Mini" }
         if let c = NotesConfig.load(), model == c.appModel {
             let label = c.isLlama ? "Gemma 4 E4B" : c.model.replacingOccurrences(of: "inferoid-notes-", with: "").uppercased()
             return "Inferoid notes model (\(label))"
@@ -172,9 +173,17 @@ enum Summarizer {
 
     static func llamaRequestBody(system: String, user: String, model: String, maxTokens: Int,
                                  skill: Skill, config: NotesConfig) -> [String: Any] {
+        llamaRequestBody(system: system, turns: [ChatTurn(role: "user", text: user)], model: model, maxTokens: maxTokens,
+                         skill: skill, config: config)
+    }
+
+    static func llamaRequestBody(system: String, turns: [ChatTurn], model: String, maxTokens: Int,
+                                 skill: Skill, config: NotesConfig) -> [String: Any] {
+        // Thinking off: Gemma 4 can think first, which only delays the first visible word of a notes or chat reply.
         var body: [String: Any] = ["model": String(model.dropFirst("llama:".count)), "stream": true,
                                     "temperature": 0.2, "max_tokens": maxTokens,
-                                    "messages": [["role": "system", "content": system], ["role": "user", "content": user]]]
+                                    "chat_template_kwargs": ["enable_thinking": false],
+                                    "messages": messages(system: system, turns: turns)]
         // Always send every adapter's scale so a request never inherits another skill's adapter: the chosen one at its
         // scale, all others at 0 (plain base when the skill has no adapter).
         if !config.adapters.isEmpty {
@@ -197,7 +206,7 @@ enum Summarizer {
         while true {
             do {
                 return try await stream(transcript: transcript, template: template, model: model, context: context,
-                                        attendeeNames: attendeeNames, constrained: !model.hasPrefix("mlx:") && !model.hasPrefix("llama:"), maxTokens: nil,
+                                        attendeeNames: attendeeNames, constrained: !model.hasPrefix("mlx:") && !model.hasPrefix("llama:") && !model.hasPrefix("inkling:"), maxTokens: nil,
                                         instructions: instructions, onText: onText)
             } catch let error as NSError where error.localizedDescription.contains("not valid JSON") && tries < 2 {
                 // The model broke the JSON. Try again (up to 3 in all); the transcript is cached, so this costs only the writing.
@@ -229,15 +238,36 @@ enum Summarizer {
     /// is an exact prefix of the next and of the final request: models with linear-attention layers (Qwen 3.5/3.6)
     /// can only reuse a cached prompt that is an exact prefix.
     private static func chatML(system: String, user: String, open: Bool) -> String {
-        let head = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + user
-        return open ? head : head + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        chatML(system: system, turns: [ChatTurn(role: "user", text: user)], open: open)
     }
 
     /// Raw Gemma 4 prompt (our fine-tuned note models). No <|think|> token, so the model does not think first.
     /// The server does not add <bos> to raw prompts, so it is written here.
     private static func gemma(system: String, user: String, open: Bool) -> String {
-        let head = "<bos><|turn>system\n" + system + "<turn|>\n<|turn>user\n" + user
-        return open ? head : head + "<turn|>\n<|turn>model\n"
+        gemma(system: system, turns: [ChatTurn(role: "user", text: user)], open: open)
+    }
+
+    /// Multi-turn Gemma 4 prompt. Earlier turns are written exactly as before, so each request extends the last one.
+    static func gemma(system: String, turns: [ChatTurn], open: Bool) -> String {
+        var s = "<bos><|turn>system\n" + system + "<turn|>\n"
+        for (i, t) in turns.enumerated() {
+            s += (t.role == "assistant" ? "<|turn>model\n" : "<|turn>user\n") + t.text
+            if !(open && i == turns.count - 1) { s += "<turn|>\n" }
+        }
+        return open ? s : s + "<|turn>model\n"
+    }
+
+    private static func chatML(system: String, turns: [ChatTurn], open: Bool) -> String {
+        var s = "<|im_start|>system\n" + system + "<|im_end|>\n"
+        for (i, t) in turns.enumerated() {
+            s += "<|im_start|>" + (t.role == "assistant" ? "assistant" : "user") + "\n" + t.text
+            if !(open && i == turns.count - 1) { s += "<|im_end|>\n" }
+        }
+        return open ? s : s + "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    }
+
+    static func messages(system: String, turns: [ChatTurn]) -> [[String: String]] {
+        [["role": "system", "content": system]] + turns.map { ["role": $0.role == "assistant" ? "assistant" : "user", "content": $0.text] }
     }
 
     static func isGemma(_ model: String) -> Bool {
@@ -276,6 +306,22 @@ enum Summarizer {
                        maxTokens: maxTokens, open: false, onText: onText, skill: .chat).content
     }
 
+    /// A chat reply to the whole thread. `turns` ends with the new user message and is append-only: every earlier turn
+    /// is sent exactly as last time, so the server reuses its cache and reads only the new message.
+    static func chat(system: String, turns: [ChatTurn], model: String, maxTokens: Int, context: Int = 32768,
+                     onText: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        try await send(system: system, turns: turns, model: model, context: context, format: nil,
+                       maxTokens: maxTokens, open: false, onText: onText, skill: .chat).content
+    }
+
+    /// Reads the thread plus the start of the next message (its records) while the user is still typing, writing 1
+    /// token, so the answer starts at once. Ollama is skipped (its cache does not keep a partial message).
+    static func prefillChat(system: String, turns: [ChatTurn], model: String, context: Int = 32768) async {
+        guard model.hasPrefix("inkling:") || model.hasPrefix("llama:") || model.hasPrefix("mlx:") else { return }
+        _ = try? await send(system: system, turns: turns, model: model, context: context, format: nil,
+                            maxTokens: 1, open: true, onText: nil, skill: .chat)
+    }
+
     struct Sent { var content: String; var seconds: Double; var promptTokens: Int; var outputTokens: Int }
 
     /// One streamed request to Ollama (/api/chat), llama-server (/v1/chat/completions), or MLX (/v1/completions).
@@ -283,23 +329,88 @@ enum Summarizer {
     private static func send(system sys: String, user: String, model: String, context: Int, format: [String: Any]?,
                                maxTokens: Int, open: Bool, onText: (@Sendable (String) -> Void)?,
                                skill: Skill = .notes) async throws -> Sent {
+        try await send(system: sys, turns: [ChatTurn(role: "user", text: user)], model: model, context: context, format: format,
+                       maxTokens: maxTokens, open: open, onText: onText, skill: skill)
+    }
+
+    /// Body of a raw Inkling request to g13 (`/v1/completions`): the prompt ends in the open final-answer channel.
+    static func inklingRequestBody(system: String, turns: [ChatTurn], model: String, maxTokens: Int, open: Bool) -> [String: Any] {
+        let prompt: String
+        if open, let last = turns.last {
+            prompt = InklingPrompt.prefix(system: system, turns: Array(turns.dropLast()), partial: last.text)
+        } else {
+            prompt = InklingPrompt.render(system: system, turns: turns)
+        }
+        return ["model": String(model.dropFirst("inkling:".count)), "stream": true, "temperature": 0.2,
+                "max_tokens": maxTokens, "stop": InklingPrompt.stops, "prompt": prompt]
+    }
+
+    /// Local servers (g13 for Inkling, llama-server, MLX) answer one request at a time; two at once (a chat, the journal
+    /// summary, a routine, read-ahead while typing) can crash them. Requests take turns, and if the server died
+    /// ("generation thread died", refused connection) it is restarted and the request tried once more.
+    private static func send(system sys: String, turns: [ChatTurn], model: String, context: Int, format: [String: Any]?,
+                               maxTokens: Int, open: Bool, onText: (@Sendable (String) -> Void)?,
+                               skill: Skill = .notes) async throws -> Sent {
+        let local = model.hasPrefix("inkling:") || model.hasPrefix("llama:") || model.hasPrefix("mlx:")
+        guard local else {
+            return try await sendOnce(system: sys, turns: turns, model: model, context: context, format: format,
+                                      maxTokens: maxTokens, open: open, onText: onText, skill: skill)
+        }
+        await ModelGate.shared.acquire()
+        do {
+            let sent: Sent
+            do {
+                sent = try await sendOnce(system: sys, turns: turns, model: model, context: context, format: format,
+                                          maxTokens: maxTokens, open: open, onText: onText, skill: skill)
+            } catch where isDeadServer(error) && !Task.isCancelled {
+                try await ModelManager.shared.restart(model)
+                sent = try await sendOnce(system: sys, turns: turns, model: model, context: context, format: format,
+                                          maxTokens: maxTokens, open: open, onText: onText, skill: skill)
+            }
+            await ModelGate.shared.release()
+            await MainActor.run { ModelHealth.shared.report(nil) }
+            return sent
+        } catch {
+            await ModelGate.shared.release()
+            if !Task.isCancelled && !(error is CancellationError) {
+                let message = error.localizedDescription
+                await MainActor.run { ModelHealth.shared.report(message) }
+            }
+            throw error
+        }
+    }
+
+    static func isDeadServer(_ error: Error) -> Bool {
+        if let url = error as? URLError, [.cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet].contains(url.code) { return true }
+        let text = error.localizedDescription.lowercased()
+        return text.contains("thread died") || text.contains("model server error 404") || text.contains("model server error 500")
+            || text.contains("model server error 503")
+    }
+
+    private static func sendOnce(system sys: String, turns: [ChatTurn], model: String, context: Int, format: [String: Any]?,
+                                 maxTokens: Int, open: Bool, onText: (@Sendable (String) -> Void)?,
+                                 skill: Skill = .notes) async throws -> Sent {
         let isMLX = model.hasPrefix("mlx:")
         let isLlama = model.hasPrefix("llama:")
+        let isInkling = model.hasPrefix("inkling:")
         var body: [String: Any]
         var request: URLRequest
-        if isMLX {
-            let prompt = isGemma(model) ? gemma(system: sys, user: user, open: open) : chatML(system: sys, user: user, open: open)
+        if isInkling, let brain = BrainModelConfig.load() {
+            body = inklingRequestBody(system: sys, turns: turns, model: model, maxTokens: maxTokens, open: open)
+            request = URLRequest(url: brain.endpoint.appendingPathComponent("v1/completions"))
+        } else if isMLX {
+            let prompt = isGemma(model) ? gemma(system: sys, turns: turns, open: open) : chatML(system: sys, turns: turns, open: open)
             body = ["model": String(model.dropFirst(4)), "stream": true, "temperature": 0.2,
                     "max_tokens": maxTokens, "stream_options": ["include_usage": true], "prompt": prompt]
             request = URLRequest(url: mlx.appendingPathComponent("v1/completions"))
         } else if isLlama, let config = NotesConfig.load() {
-            body = llamaRequestBody(system: sys, user: user, model: model, maxTokens: maxTokens, skill: skill, config: config)
+            body = llamaRequestBody(system: sys, turns: turns, model: model, maxTokens: maxTokens, skill: skill, config: config)
             request = URLRequest(url: endpoint(for: config).appendingPathComponent("v1/chat/completions"))
         } else {
             var options: [String: Any] = ["temperature": 0.2, "num_ctx": context]
             if open || maxTokens < 4000 { options["num_predict"] = maxTokens }
             body = ["model": model, "stream": true, "think": false, "keep_alive": "30m", "options": options,
-                    "messages": [["role": "system", "content": sys], ["role": "user", "content": user]]]
+                    "messages": messages(system: sys, turns: turns)]
             if let format { body["format"] = format }
             request = URLRequest(url: ollama.appendingPathComponent("api/chat"))
         }
@@ -314,7 +425,7 @@ enum Summarizer {
         var content = "", promptTokens = 0, outputTokens = 0, errorText = ""
         for try await line in bytes.lines {
             var payload = Substring(line)
-            if isMLX || isLlama {
+            if isMLX || isLlama || isInkling {
                 guard payload.hasPrefix("data:") else { if status >= 400 { errorText += line }; continue }
                 payload = payload.dropFirst(5).drop { $0 == " " }
                 if payload == "[DONE]" { break }
@@ -325,9 +436,9 @@ enum Summarizer {
             }
             if let error = json["error"] {
                 let text = (error as? String) ?? ((error as? [String: Any])?["message"] as? String) ?? "\(error)"
-                throw fail(((isMLX || isLlama) ? "Model server: " : "Ollama: ") + text, status)
+                throw fail(((isMLX || isLlama || isInkling) ? "Model server: " : "Ollama: ") + text, status)
             }
-            if isMLX || isLlama {
+            if isMLX || isLlama || isInkling {
                 if let choices = json["choices"] as? [[String: Any]],
                    let piece = (choices.first?["text"] as? String) ?? ((choices.first?["delta"] as? [String: Any])?["content"] as? String) {
                     content += piece
@@ -450,6 +561,28 @@ public enum InferoidPaths {
 enum Store {
     static var root: URL { InferoidPaths.documents }
 
+    /// Records predate the Brain setting. Treat absent or malformed metadata as included.
+    static func includeInBrain(in folder: URL) -> Bool {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("meta.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = object["includeInBrain"] as? Bool else { return true }
+        return value
+    }
+
+    static func setIncludeInBrain(_ included: Bool, in folder: URL) throws {
+        let url = folder.appendingPathComponent("meta.json")
+        var object: [String: Any] = [:]
+        if let data = try? Data(contentsOf: url) {
+            guard let existing = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(domain: "Store", code: 2, userInfo: [NSLocalizedDescriptionKey: "Record metadata is invalid."])
+            }
+            object = existing
+        }
+        object["includeInBrain"] = included
+        try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            .write(to: url, options: .atomic)
+    }
+
     @discardableResult
     static func save(started: Date, lines: [Line], notes: Notes?, meta: [String: Any],
                      attendeeNames: [String] = [], to dir: URL? = nil) throws -> URL {
@@ -468,6 +601,8 @@ enum Store {
             try encoder.encode(notes).write(to: folder.appendingPathComponent("notes.json"))
         }
         var m = meta
+        let privateAtCreation = (m["privateMode"] as? Bool) ?? false
+        m["includeInBrain"] = privateAtCreation ? false : ((m["includeInBrain"] as? Bool) ?? true)
         m["started"] = ISO8601DateFormatter().string(from: started)
         m["lines"] = lines.count
         try JSONSerialization.data(withJSONObject: m, options: [.prettyPrinted, .sortedKeys])
@@ -487,5 +622,34 @@ enum Store {
         let updated = text.replacingOccurrences(of: "] \(oldName):**", with: "] \(cleanName):**")
         try updated.write(to: url, atomically: true, encoding: .utf8)
         return updated
+    }
+}
+
+/// One request at a time to the local model server, first come first served.
+actor ModelGate {
+    static let shared = ModelGate()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
+/// Whether the local model answered its last request (Home shows it as a green or red light).
+@MainActor
+final class ModelHealth: ObservableObject {
+    static let shared = ModelHealth()
+    @Published private(set) var lastError: String?
+    @Published private(set) var lastOK: Date?
+    @Published var restarting = false
+
+    func report(_ error: String?) {
+        if let error { lastError = error } else { lastError = nil; lastOK = Date() }
     }
 }

@@ -20,6 +20,7 @@ public final class Recorder: ObservableObject {
     @Published var levelMe: Float = 0
     @Published var levelThem: Float = 0
     @Published var online = true
+    @Published var privateMode = PrivateMode.isEnabled
     @Published var models: [String] = []
     @Published var model: String { didSet { UserDefaults.standard.set(model, forKey: "model") } }
     @Published var template: Template { didSet { UserDefaults.standard.set(template.rawValue, forKey: "template") } }
@@ -48,6 +49,7 @@ public final class Recorder: ObservableObject {
     private let themQueue = DispatchQueue(label: "ai.inferoid.notes.them")
     private var pending: [Task<Void, Never>] = []
     private var started = Date()
+    private var privateModeAtStart = false
     private var timer: Timer?
     private var prefillTimer: Timer?
     private var prefillBusy = false
@@ -69,7 +71,8 @@ public final class Recorder: ObservableObject {
     @Published var pendingRecoveries: [RecordingJournal.Pending] = []
 
     public init() {
-        model = UserDefaults.standard.string(forKey: "model") ?? NotesConfig.load()?.appModel ?? "gemma4:e4b"
+        let saved = UserDefaults.standard.string(forKey: "model")
+        model = (UserDefaults.standard.bool(forKey: "showAllModels") ? saved : nil) ?? NotesConfig.defaultModel ?? saved ?? "gemma4:e4b"
         template = Template(rawValue: UserDefaults.standard.string(forKey: "template") ?? "") ?? .general
         monitor.pathUpdateHandler = { path in
             Task { @MainActor in Recorder.shared.online = path.status == .satisfied }
@@ -101,6 +104,11 @@ public final class Recorder: ObservableObject {
 
     func toggle() { Task { isRecording ? await stop() : await start() } }
 
+    func setPrivateMode(_ enabled: Bool) {
+        privateMode = enabled
+        PrivateMode.setEnabled(enabled)
+    }
+
     func start() async {
         guard !isRecording, !isWriting else { return }
         error = nil
@@ -108,6 +116,7 @@ public final class Recorder: ObservableObject {
         guard await transcriber.isReady else { return }
         lines = []; notes = nil; notesInfo = ""; savedFolder = nil; feedbackFor = nil; elapsed = 0
         started = Date()
+        privateModeAtStart = PrivateMode.isEnabled
         let calendarContext = await MeetingCalendar.currentContext(at: started)
         attendeeNames = calendarContext.attendeeNames
 
@@ -400,7 +409,8 @@ public final class Recorder: ObservableObject {
             notesInfo = "Not enough was said for notes; the transcript is saved."
             status = "Notes ready"
             savedFolder = try? Store.save(started: started, lines: lines, notes: notes,
-                                          meta: ["template": template.rawValue, "duration_s": Int(elapsed), "short": true],
+                                          meta: ["template": template.rawValue, "duration_s": Int(elapsed), "short": true,
+                                                 "privateMode": privateModeAtStart],
                                           attendeeNames: attendeeNames)
             if let folder = savedFolder, let brain = try? BrainStore() {
                 let startedText = ISO8601DateFormatter().string(from: started)
@@ -414,7 +424,8 @@ public final class Recorder: ObservableObject {
         status = "Writing notes on this Mac…"
         let writeStarted = Date()
         var meta: [String: Any] = ["model": model, "template": template.rawValue,
-                                   "duration_s": Int(elapsed), "speech_model": "parakeet-tdt-0.6b-v2"]
+                                   "duration_s": Int(elapsed), "speech_model": "parakeet-tdt-0.6b-v2",
+                                   "privateMode": privateModeAtStart]
         if !attendeeNames.isEmpty { meta["attendees"] = attendeeNames }
         do {
             if ModelManager.shared.manages(model) { status = "Loading the notes model…" }
@@ -468,13 +479,58 @@ public final class Recorder: ObservableObject {
 
     @Published var askQuery = ""
     @Published var askAnswer = ""
-    @Published var askSources: [Hit] = []
+    @Published var askSources: [SourceHit] = []
     @Published var askBusy = false
     @Published var meetings: [Meeting] = []
     @Published var brainBackfillProgress: Double?
     @Published var brainBackfillStatus = ""
 
     func reloadMeetings() { meetings = Brain.load() }
+
+    func canDeleteMeeting(_ meeting: Meeting) -> Bool {
+        guard !isRecording else { return false }
+        if isWriting, let savedFolder { return savedFolder.standardizedFileURL != meeting.folder.standardizedFileURL }
+        return true
+    }
+
+    /// Saves the per-meeting Brain choice. Turning it off also removes the meeting's current graph data; turning it
+    /// back on starts a fresh extraction from its transcript.
+    @discardableResult
+    func setIncludeInBrain(_ included: Bool, for meeting: Meeting) -> Bool {
+        do {
+            let brain = try BrainStore()
+            if included {
+                try Store.setIncludeInBrain(true, in: meeting.folder)
+                let model = model
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isRecording, !self.isWriting else { return }
+                    _ = try? await ModelManager.shared.ensure(model)
+                    _ = await BrainExtraction.process(folder: meeting.folder, model: model, store: brain)
+                    ModelManager.shared.idle()
+                    self.reloadMeetings()
+                }
+            } else {
+                try brain.removeMeetingData(meetingFolder: meeting.folder)
+                try Store.setIncludeInBrain(false, in: meeting.folder)
+                reloadMeetings()
+            }
+            return true
+        } catch {
+            self.error = "Brain setting: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func deleteMeeting(_ meeting: Meeting) throws {
+        guard canDeleteMeeting(meeting) else {
+            throw NSError(domain: "Recorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "This meeting is still being recorded."])
+        }
+        try FileManager.default.trashItem(at: meeting.folder, resultingItemURL: nil)
+        let brain = try BrainStore()
+        try brain.removeMeetingData(meetingFolder: meeting.folder)
+        if savedFolder?.standardizedFileURL == meeting.folder.standardizedFileURL { savedFolder = nil }
+        reloadMeetings()
+    }
 
     /// Runs the one-at-a-time brain backfill after the caller has opened the vault. The notes model is loaded once
     /// and reused by every extraction request; cancelling the task stops before the next meeting.
@@ -492,8 +548,8 @@ public final class Recorder: ObservableObject {
                     guard let self else { return }
                     self.brainBackfillProgress = min(1, Double(completed) / Double(total))
                     switch result {
-                    case .failed: self.brainBackfillStatus = "Skipped meeting \(completed) of \(total)"
-                    default: self.brainBackfillStatus = "Reading meeting \(completed) of \(total)…"
+                    case .failed: self.brainBackfillStatus = "Skipped record \(completed) of \(total)"
+                    default: self.brainBackfillStatus = "Reading record \(completed) of \(total)…"
                     }
                 }
             }
@@ -513,7 +569,9 @@ public final class Recorder: ObservableObject {
         }
     }
 
-    var searchHits: [Hit] { Brain.search(askQuery, in: meetings) }
+    var searchHits: [SourceHit] {
+        Brain.searchSources(askQuery, in: SourceRegistry.documents(meetings: meetings, projects: ProjectStore.shared.projects))
+    }
 
     func ask() {
         let question = askQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -524,7 +582,7 @@ public final class Recorder: ObservableObject {
                 if ModelManager.shared.manages(model) { askAnswer = "Loading the notes model…" }
                 try await ModelManager.shared.ensure(model)
                 askAnswer = ""
-                let r = try await Brain.ask(question, model: model, meetings: meetings) { text in
+                let r = try await Brain.ask(question, model: model, meetings: meetings, projects: ProjectStore.shared.projects) { text in
                     Task { @MainActor in Recorder.shared.askAnswer = text }
                 }
                 askAnswer = r.answer; askSources = r.sources

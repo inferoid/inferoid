@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from . import notes
+from . import brain, notes
 
 
 @dataclass(frozen=True)
@@ -41,11 +41,14 @@ def listing(mem: dict[str, float]) -> list[str]:
     lines = ["Jobs Inferoid can do on this machine:"]
     for j in JOBS.values():
         lines.append(f"  {j.key:<8} {j.label}\n           on this machine: {j.fit(mem)}")
+    lines.append(f"  {'brain':<8} Brain chat with Inkling 2 Mini, an add-on for the app\n           on this machine: {brain.fit_line(mem)}")
     lines.append("\nAdd one with: inferoid add <job>   (coding and general: inferoid setup)")
     return lines
 
 
 def add(key: str, mem: dict[str, float], out: Callable[[str], None] = print, runtime: str = "mlx") -> int:
+    if key == "brain":  # an add-on for the notes app, not a setup-menu job
+        return brain.install(mem, out)
     job = JOBS.get(key)
     if not job:
         out(f"Unknown job {key!r}. Jobs: {', '.join(JOBS)}")
@@ -63,6 +66,8 @@ def add(key: str, mem: dict[str, float], out: Callable[[str], None] = print, run
 
 
 def remove(key: str, out: Callable[[str], None] = print) -> int:
+    if key == "brain":
+        return brain.uninstall(out)
     job = JOBS.get(key)
     if not job or not job.remove:
         out(f"Nothing to remove for {key!r}. Removable: {', '.join(k for k, j in JOBS.items() if j.remove)}. "

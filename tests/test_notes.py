@@ -39,7 +39,7 @@ def _llama_source(tmp_path):
         info.mode = 0o755
         tar.addfile(info, io.BytesIO(data))
     (src / notes.LLAMA_BASE).write_bytes(b"gguf")
-    (src / "SHA256SUMS").write_text(hashlib.sha256(b"zip").hexdigest() + "  InferoidNotes.zip\n")
+    (src / "SHA256SUMS").write_text(hashlib.sha256(b"zip").hexdigest() + "  Inferoid.zip\n")
     return src
 
 
@@ -54,7 +54,7 @@ def test_install_from_folder(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     monkeypatch.setenv("INFEROID_NOTES_SOURCE", str(_source(tmp_path)))
     cmds, lines = [], []
-    rc = notes.install({"ram_gb": 24}, lines.append, run=lambda c: cmds.append(c) or 0, apps_dir=tmp_path, python="/usr/bin/python3")
+    rc = notes.install({"ram_gb": 16}, lines.append, run=lambda c: cmds.append(c) or 0, apps_dir=tmp_path, python="/usr/bin/python3")
     assert rc == 0, lines
     cfg = notes.installed()
     assert cfg["model"] == "inferoid-notes-e4b" and cfg["port"] == 8090
@@ -66,7 +66,7 @@ def test_install_rejects_bad_checksum_and_missing_source(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     lines = []
     monkeypatch.setenv("INFEROID_NOTES_SOURCE", str(_source(tmp_path, bad_sum=True)))
-    assert notes.install({"ram_gb": 24}, lines.append, run=lambda c: 0, apps_dir=tmp_path) == 1
+    assert notes.install({"ram_gb": 16}, lines.append, run=lambda c: 0, apps_dir=tmp_path) == 1
     assert "checksum" in lines[-1]
     assert notes.install({"ram_gb": 4}, lines.append) == 1 and "at least 8 GB" in lines[-1]
 
@@ -77,7 +77,7 @@ def test_install_default_pulls_release_app_and_hf_model(tmp_path, monkeypatch):
     rel = tmp_path / "release"
     rel.mkdir()
     (rel / notes.APP_ZIP).write_bytes(b"zip")
-    (rel / (notes.APP_ZIP + ".sha256")).write_text(hashlib.sha256(b"zip").hexdigest() + "  InferoidNotes.zip\n")
+    (rel / (notes.APP_ZIP + ".sha256")).write_text(hashlib.sha256(b"zip").hexdigest() + "  Inferoid.zip\n")
     urls = []
 
     def fetcher(src, name, dest):
@@ -109,7 +109,7 @@ def test_install_llama_pins_server_and_base(tmp_path, monkeypatch):
     def fetcher(source, name, dest):
         return notes.fetch(str(src), name, dest)
 
-    assert notes.install({"ram_gb": 24}, lambda _: None, fetcher=fetcher, run=lambda cmd: cmds.append(cmd) or 0,
+    assert notes.install({"ram_gb": 16}, lambda _: None, fetcher=fetcher, run=lambda cmd: cmds.append(cmd) or 0,
                          apps_dir=tmp_path, runtime="llama") == 0
     cfg = notes.installed()
     assert cfg["runtime"] == "llama" and cfg["port"] == 8090 and cfg["adapters"] == []
@@ -240,5 +240,108 @@ def test_install_uses_uv_python_when_available(tmp_path, monkeypatch):
             (tmp_path / "home" / "venv" / "bin" / "python").write_text("")
         return 0
 
-    assert notes.install({"ram_gb": 24}, lambda s: None, run=run, apps_dir=tmp_path) == 0
+    assert notes.install({"ram_gb": 16}, lambda s: None, run=run, apps_dir=tmp_path) == 0
     assert cmds[0][:4] == ["/opt/uv", "venv", "--python", "3.12"] and cmds[1][:3] == ["/opt/uv", "pip", "install"]
+
+
+def _brain_pack(tmp_path):
+    import hashlib as h
+    from inferoid import brain
+    src = tmp_path / "pack"
+    src.mkdir()
+    sums = {}
+    for name in brain.PACK_FILES:
+        (src / name).write_bytes(name.encode())
+        sums[name] = h.sha256(name.encode()).hexdigest()
+    return src, sums
+
+
+def test_brain_install_writes_config_for_the_app(tmp_path, monkeypatch):
+    from inferoid import brain
+    _env(tmp_path, monkeypatch)
+    notes.home().mkdir(parents=True)
+    notes.config_path().write_text("{}")
+    src, sums = _brain_pack(tmp_path)
+    monkeypatch.setattr(brain, "PACK_FILES", sums)
+    monkeypatch.setattr(brain.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    cmds, lines = [], []
+
+    def run(cmd):
+        cmds.append(cmd)
+        if cmd[1] == "venv":
+            g13 = brain.root() / "g13-venv" / "bin" / "g13"
+            g13.parent.mkdir(parents=True, exist_ok=True)
+            g13.write_text("#!/bin/sh\n")
+        return 0
+
+    rc = brain.install({"ram_gb": 24}, lines.append, fetcher=lambda _src, name, dest: notes.fetch(str(src), name, dest), run=run)
+    assert rc == 0, lines
+    cfg = brain.installed()
+    assert cfg["runtime"] == "g13" and cfg["port"] == brain.PORT
+    assert cfg["g13"].endswith("g13-venv/bin/g13")
+    assert all((brain.root() / "inkling-g13-q3-bf16" / n).exists() for n in sums)
+    assert any("g13 @ git+https://gitlab.com/karulab/g13-engine.git@c91c0180" in " ".join(c) for c in cmds)
+
+
+def test_brain_install_refuses_small_macs_and_bad_downloads(tmp_path, monkeypatch):
+    from inferoid import brain
+    _env(tmp_path, monkeypatch)
+    lines = []
+    assert brain.install({"ram_gb": 16}, lines.append) == 1
+    assert "at least 24 GB" in lines[-1]
+    notes.home().mkdir(parents=True)
+    notes.config_path().write_text("{}")
+    src, sums = _brain_pack(tmp_path)
+    sums["config.json"] = "0" * 64
+    monkeypatch.setattr(brain, "PACK_FILES", sums)
+    g13 = brain.root() / "g13-venv" / "bin" / "g13"
+    g13.parent.mkdir(parents=True)
+    g13.write_text("")
+    rc = brain.install({"ram_gb": 32}, lines.append, fetcher=lambda _src, name, dest: notes.fetch(str(src), name, dest), run=lambda c: 0)
+    assert rc == 1 and "checksum" in lines[-1]
+    assert brain.installed() is None
+
+
+def test_brain_uninstall_keeps_the_notes_app(tmp_path, monkeypatch):
+    from inferoid import brain
+    _env(tmp_path, monkeypatch)
+    (brain.root() / "inkling-g13-q3-bf16").mkdir(parents=True)
+    brain.config_path().write_text("{}")
+    notes.config_path().write_text("{}")
+    assert brain.uninstall(lambda _: None, kill=lambda *_: None) == 0
+    assert not brain.root().exists() and brain.installed() is None and notes.installed() == {}
+
+
+def test_install_24gb_macs_get_inkling_as_their_one_model(tmp_path, monkeypatch):
+    from inferoid import brain
+    _env(tmp_path, monkeypatch)
+    assert notes.fit_line({"ram_gb": 24}).startswith("inkling-2-mini")
+    assert notes.fit_line({"ram_gb": 16}).startswith("inferoid-notes-e4b")
+    src, sums = _brain_pack(tmp_path)
+    monkeypatch.setattr(brain, "PACK_FILES", sums)
+    monkeypatch.setattr(brain.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    app = tmp_path / "app-src"
+    app.mkdir()
+    (app / notes.APP_ZIP).write_bytes(b"zip")
+    (app / "SHA256SUMS").write_text(hashlib.sha256(b"zip").hexdigest() + "  Inferoid.zip\n")
+    monkeypatch.setenv("INFEROID_NOTES_SOURCE", str(app))
+    cmds, lines = [], []
+
+    def run(cmd):
+        cmds.append(cmd)
+        if cmd[1] == "venv":
+            g13 = brain.root() / "g13-venv" / "bin" / "g13"
+            g13.parent.mkdir(parents=True, exist_ok=True)
+            g13.write_text("")
+        return 0
+
+    def fetcher(src_, name, dest):
+        return notes.fetch(str(src if name in sums else app), name, dest)
+
+    rc = notes.install({"ram_gb": 24}, lines.append, fetcher=fetcher, run=run, apps_dir=tmp_path)
+    assert rc == 0, lines
+    assert notes.installed()["runtime"] == "inkling" and brain.installed()["runtime"] == "g13"
+    assert not any("mlx-lm" in " ".join(c) for c in cmds)  # no Gemma notes model or its server on this tier
+    assert not (notes.home() / "inferoid-notes-e4b").exists()
+    monkeypatch.setenv("INFEROID_NOTES_GEMMA", "1")
+    assert notes.fit_line({"ram_gb": 24}).startswith("inferoid-notes-e4b")

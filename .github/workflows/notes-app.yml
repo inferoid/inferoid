@@ -2,7 +2,7 @@ name: notes-app
 # Builds the Inferoid Mac app on a GitHub Mac, so nobody needs Xcode. Tag notes-v* to publish a release.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
     tags: ["notes-v*"]
     paths: ["apps/notes/**", ".github/workflows/notes-app.yml"]
   pull_request:
@@ -21,18 +21,27 @@ jobs:
         run: cd apps/notes && swift test
       - name: Build the app
         run: apps/notes/build-app.sh
+      - name: Sign and notarize (release tags)
+        if: startsWith(github.ref, 'refs/tags/notes-v')
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: apps/notes/sign-notarize.sh
       - name: Zip
         run: |
           cd apps/notes/build
-          ditto -c -k --keepParent "Inferoid.app" InferoidNotes.zip
-          shasum -a 256 InferoidNotes.zip | tee InferoidNotes.zip.sha256
+          [ -f Inferoid.zip ] || ditto -c -k --keepParent "Inferoid.app" Inferoid.zip
+          shasum -a 256 Inferoid.zip | tee Inferoid.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: InferoidNotes
-          path: apps/notes/build/InferoidNotes.zip*
+          name: Inferoid
+          path: apps/notes/build/Inferoid.zip*
       - name: Release
         if: startsWith(github.ref, 'refs/tags/notes-v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" apps/notes/build/InferoidNotes.zip apps/notes/build/InferoidNotes.zip.sha256 --title "Inferoid ${GITHUB_REF_NAME#notes-v}" --notes "Inferoid for Mac: meeting notes and a private brain across your meetings. Install with: inferoid add notes"
+          gh release create "$GITHUB_REF_NAME" apps/notes/build/Inferoid.zip apps/notes/build/Inferoid.zip.sha256 --title "Inferoid ${GITHUB_REF_NAME#notes-v}" --notes "Inferoid for Mac: meeting notes and a private brain across your meetings. Install with: inferoid add notes"

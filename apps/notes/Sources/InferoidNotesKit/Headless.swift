@@ -7,7 +7,11 @@ import Foundation
 ///   InferoidNotes --summarize transcript.txt --model M [--template T] [--instructions TEXT] [--context N] [--json OUT]
 ///       notes only, for comparing models on the same transcript.
 ///   InferoidNotes --ask "question" [--model M] [--root DIR]
-///       private brain: answers from the saved meetings (default ~/Documents/Inferoid Notes).
+///       private brain: answers from saved local records (default ~/Documents/Inferoid Notes).
+///   InferoidNotes --brain-ingest DIR --db brain.sqlite [--model M]
+///       builds a fact graph from every meeting folder in DIR into a separate database (graph tests).
+///   InferoidNotes --brain-ask questions.jsonl --root DIR --db brain.sqlite [--model M] [--out answers.jsonl]
+///       answers each {"id","question"} line the way Brain chat does: meeting excerpts + graph facts, short reply.
 public enum Headless {
     static func value(_ args: [String], _ flag: String) -> String? {
         guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
@@ -16,7 +20,7 @@ public enum Headless {
 
     public static func run(_ args: [String]) async throws {
         let template = Template(rawValue: value(args, "--template") ?? "general") ?? .general
-        let defaultModel = NotesConfig.load()?.appModel ?? "gemma4:e4b"
+        let defaultModel = NotesConfig.defaultModel ?? "gemma4:e4b"
         if let question = value(args, "--ask") {
             let model = value(args, "--model") ?? defaultModel
             let meetings = Brain.load(root: value(args, "--root").map { URL(fileURLWithPath: $0) } ?? Store.root)
@@ -24,8 +28,50 @@ public enum Headless {
             let started = Date()
             let r = try await Brain.ask(question, model: model, meetings: meetings)
             print(r.answer)
-            print(String(format: "\n(%d meetings searched; answered from: %@; %.1f s)", meetings.count,
-                         r.sources.map { "\($0.meeting.title) \($0.meeting.date)" }.joined(separator: " | "), Date().timeIntervalSince(started)))
+            print(String(format: "\n(%d saved records searched; answered from: %@; %.1f s)",
+                         SourceRegistry.documents(meetings: meetings, projects: []).count,
+                         r.sources.map { "\($0.kind.label): \($0.title) \($0.date)" }.joined(separator: " | "), Date().timeIntervalSince(started)))
+            await MainActor.run { ModelManager.shared.stop() }
+            return
+        }
+        if let root = value(args, "--brain-ingest"), let db = value(args, "--db") {
+            let model = value(args, "--model") ?? defaultModel
+            let store = try BrainStore(url: URL(fileURLWithPath: db))
+            try await ModelManager.shared.ensure(model)
+            var counts: [String: Int] = [:]
+            let started = Date()
+            await BrainBackfill.run(root: URL(fileURLWithPath: root), model: model, store: store) { result in
+                counts["\(result)", default: 0] += 1
+            }
+            print(String(format: "%@ in %.0f s", counts.map { "\($0.key) \($0.value)" }.sorted().joined(separator: ", "), Date().timeIntervalSince(started)))
+            await MainActor.run { ModelManager.shared.stop() }
+            return
+        }
+        if let path = value(args, "--brain-ask"), let root = value(args, "--root"), let db = value(args, "--db") {
+            let model = value(args, "--model") ?? defaultModel
+            let store = try BrainStore(url: URL(fileURLWithPath: db))
+            let meetings = Brain.load(root: URL(fileURLWithPath: root))
+            try await ModelManager.shared.ensure(model)
+            var out = ""
+            for line in try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n") {
+                guard let q = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let id = q["id"] as? String, let question = q["question"] as? String else { continue }
+                let hits = Brain.search(question, in: meetings, limit: 4)
+                let facts = ChatStore.factsForChat(question, store: store)
+                let (system, turn, tokens) = await MainActor.run {
+                    (ChatStore.systemPrompt(tools: []),
+                     ChatStore.evidenceText(question: question, hits: hits, brainFacts: facts) + ChatStore.question(question),
+                     ChatStore.replyTokens)
+                }
+                let t0 = Date()
+                let answer = try await Summarizer.chat(system: system, turns: [ChatTurn(role: "user", text: turn)], model: model,
+                                                       maxTokens: tokens)
+                let row: [String: Any] = ["id": id, "answer": answer, "seconds": Date().timeIntervalSince(t0),
+                                          "facts": facts.map { $0.fact.id }, "meetings": hits.map { $0.meeting.id }]
+                out += String(data: try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]), encoding: .utf8)! + "\n"
+                print(id, String(format: "%.1f s", Date().timeIntervalSince(t0)))
+            }
+            if let dest = value(args, "--out") { try out.write(toFile: dest, atomically: true, encoding: .utf8) } else { print(out) }
             await MainActor.run { ModelManager.shared.stop() }
             return
         }

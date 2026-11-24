@@ -1,3 +1,4 @@
+import AppKit
 import EventKit
 import Foundation
 
@@ -14,11 +15,31 @@ struct MeetingCalendarEvent {
     let startDate: Date
     let endDate: Date
     let attendeeNames: [String]
+    let attendeeEmails: [String]
 }
 
 /// Calendar is queried locally through EventKit. Google Calendar events already
 /// appear here when the user has added that account to macOS Calendar.
 enum MeetingCalendar {
+    /// True once the user has given Inferoid access to their calendars.
+    static var isConnected: Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if #available(macOS 14.0, *) { return status == .fullAccess }
+        return status.rawValue == 3  // .authorized before macOS 14
+    }
+
+    /// Asks macOS for calendar access; if it was refused before, opens the Calendars privacy settings instead.
+    static func connect() async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if status == .denied || status == .restricted {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                await MainActor.run { _ = NSWorkspace.shared.open(url) }
+            }
+            return false
+        }
+        return await requestAccess(to: EKEventStore())
+    }
+
     static func upcomingEvent(within minutes: Int = 15, now: Date = Date()) async -> MeetingCalendarEvent? {
         let store = EKEventStore()
         guard await requestAccess(to: store) else { return nil }
@@ -27,8 +48,9 @@ enum MeetingCalendar {
             .filter { !$0.isAllDay && $0.startDate >= now && $0.startDate <= end }
             .sorted { $0.startDate < $1.startDate }
         guard let event = events.first else { return nil }
+        let attendees = values(for: event)
         return MeetingCalendarEvent(title: event.title ?? "Calendar event", startDate: event.startDate, endDate: event.endDate,
-                                    attendeeNames: names(for: event))
+                                    attendeeNames: attendees.map { $0.name }, attendeeEmails: attendees.compactMap { $0.email })
     }
 
     static func currentContext(at now: Date = Date()) async -> MeetingCalendarContext {
@@ -46,16 +68,21 @@ enum MeetingCalendar {
     }
 
     private static func names(for event: EKEvent) -> [String] {
+        values(for: event).map { $0.name }
+    }
+
+    private static func values(for event: EKEvent) -> [(name: String, email: String?)] {
         var seen = Set<String>()
         // A Google calendar added to macOS is titled with its account address; skip that guest too in case
         // EventKit does not mark them as the current user.
         let own = Set([event.calendar?.title, event.calendar?.source?.title].compactMap { $0?.lowercased() })
-        return (event.attendees ?? []).compactMap { participant -> String? in
+        return (event.attendees ?? []).compactMap { participant -> (name: String, email: String?)? in
             guard !participant.isCurrentUser,
                   !own.contains(address(participant.url)),
                   let name = displayName(name: participant.name, url: participant.url),
                   seen.insert(name).inserted else { return nil }
-            return name
+            let email = address(participant.url)
+            return (name, email.isEmpty ? nil : email)
         }
     }
 

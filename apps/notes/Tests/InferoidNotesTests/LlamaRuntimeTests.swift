@@ -16,7 +16,7 @@ final class LlamaRuntimeTests: XCTestCase {
         XCTAssertTrue(c.isLlama)
         XCTAssertEqual(c.appModel, "llama:/tmp/base.gguf")
         XCTAssertEqual(NotesConfig.serverArguments(c), [
-            "-m", "/tmp/base.gguf", "--port", "8123", "-c", "32768", "-np", "1",
+            "-m", "/tmp/base.gguf", "--port", "8123", "-c", "32768", "-np", "1", "--cache-ram", "2048",
             "--lora", "/tmp/brain.gguf", "--lora", "/tmp/notes.gguf", "--lora-init-without-apply",
         ])
     }
@@ -37,6 +37,7 @@ final class LlamaRuntimeTests: XCTestCase {
         XCTAssertEqual(lora.count, 1)
         let brainScale: Double? = lora[0]["scale"] as? Double
         XCTAssertEqual(brainScale, 0)  // brain adapter explicitly off
+        XCTAssertEqual((body["chat_template_kwargs"] as? [String: Bool])?["enable_thinking"], false)
     }
 
     func testLlamaRequestSelectsTheSkillAdapter() {

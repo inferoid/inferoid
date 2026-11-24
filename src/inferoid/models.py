@@ -36,9 +36,9 @@ def ollama_loaded(get: Callable[[str], Any] = _get) -> dict[str, float]:
         return {}
 
 
-def notes_running(get: Callable[[str], Any] = _get) -> bool:
+def notes_running(get: Callable[[str], Any] = _get, port: int = notes.PORT) -> bool:
     try:
-        get(f"http://127.0.0.1:{notes.PORT}/v1/models")
+        get(f"http://127.0.0.1:{port}/v1/models")
         return True
     except (OSError, ValueError):
         return False
@@ -60,8 +60,10 @@ def status(memory: dict[str, float] | None = None, get: Callable[[str], Any] = _
         lines.append("  nothing yet: run inferoid setup")
     lines.append("\nLoaded now:")
     used = 0.0
-    if cfg and notes_running(get):
+    if cfg and notes_running(get, 8095 if cfg.get("runtime") == "inkling" else notes.PORT):
         gb = 6.0 if "e4b" in cfg["model"] else 4.0  # weights + speech model + working memory for an hour-long call
+        if cfg.get("runtime") == "inkling":
+            gb = 14.0  # 12.3 GB pack + caches (g13 server on brain.PORT)
         used += gb
         lines.append(f"  {cfg['model']:<44} ~{gb:.0f} GB  (stops after 10 idle minutes)")
     for name, gb in loaded.items():

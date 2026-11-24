@@ -267,6 +267,7 @@ public struct SettingsView: View {
             AudioSettings().tabItem { Label("Audio", systemImage: "waveform") }
             FeedbackSettings().tabItem { Label("Feedback", systemImage: "hand.thumbsup") }
             PrivacySettings().tabItem { Label("Privacy", systemImage: "lock") }
+            ResearchSettings().tabItem { Label("Page Search", systemImage: "magnifyingglass") }
         }
         .frame(width: 560, height: 460)
     }

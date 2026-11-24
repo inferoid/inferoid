@@ -1,35 +1,45 @@
+import AppKit
 import Darwin
 import SwiftUI
 
 private enum BrainUI {
-    static let page = Color(red: 0.94, green: 0.945, blue: 0.96)
-    static let panel = Color(red: 0.985, green: 0.985, blue: 0.99)
-    static let ink = Color(red: 0.08, green: 0.09, blue: 0.10)
-    static let muted = Color(red: 0.30, green: 0.33, blue: 0.38)
-    static let blue = Color(red: 0.12, green: 0.30, blue: 0.72)
-    static let teal = Color(red: 0.04, green: 0.42, blue: 0.39)
-    static let orange = Color(red: 0.62, green: 0.25, blue: 0.06)
-    static let purple = Color(red: 0.32, green: 0.22, blue: 0.58)
-    static let green = Color(red: 0.19, green: 0.38, blue: 0.16)
+    // System colours so every screen reads correctly in light and dark mode.
+    static let page = Color(nsColor: .windowBackgroundColor)
+    static let panel = Color(nsColor: .controlBackgroundColor)
+    static let ink = Color(nsColor: .labelColor)
+    static let muted = Color(nsColor: .secondaryLabelColor)
+    static let blue = adaptive(light: (0.12, 0.30, 0.72), dark: (0.45, 0.62, 1.0))
+    static let teal = adaptive(light: (0.04, 0.42, 0.39), dark: (0.30, 0.78, 0.72))
+    static let orange = adaptive(light: (0.62, 0.25, 0.06), dark: (0.98, 0.60, 0.36))
+    static let purple = adaptive(light: (0.32, 0.22, 0.58), dark: (0.70, 0.60, 0.98))
+    static let green = adaptive(light: (0.19, 0.38, 0.16), dark: (0.50, 0.80, 0.45))
+
+    static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let c = isDark ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
+    }
 
     static func color(for world: BrainWorld) -> Color {
         switch world {
-        case .client: return teal
-        case .opposing: return orange
-        case .court: return purple
-        case .team: return blue
-        case .personal: return green
+        case .friend: return teal
+        case .family: return green
+        case .business: return blue
+        case .mentor: return purple
+        case .mentee: return orange
         case .other, .unknown: return muted
         }
     }
 
     static func label(for world: BrainWorld) -> String {
         switch world {
-        case .client: return "Client"
-        case .opposing: return "Opposing"
-        case .court: return "Court"
-        case .team: return "Team"
-        case .personal: return "Personal"
+        case .friend: return "Friend"
+        case .family: return "Family"
+        case .business: return "Business"
+        case .mentor: return "Mentor"
+        case .mentee: return "Mentee"
         case .other: return "Other"
         case .unknown: return "Unknown"
         }
@@ -58,6 +68,7 @@ private struct BrainCard<Content: View>: View {
     var body: some View {
         content
             .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12).fill(BrainUI.panel))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.18)))
     }
@@ -76,23 +87,32 @@ private struct StoredLocally: View {
 
 private struct BrainSourceChip: View {
     @EnvironmentObject private var rec: Recorder
+    @ObservedObject private var projectStore = ProjectStore.shared
     let episode: BrainEpisode?
-    let open: (String) -> Void
+    let open: (String, BrainSourceKind) -> Void
 
     var body: some View {
+        let source = episode.flatMap { SourceRegistry.episodeSource($0.meetingFolder, meetings: rec.meetings, projects: projectStore.projects) }
         Button {
-            guard let episode, rec.meetings.contains(where: { $0.folder.path == episode.meetingFolder }) else { return }
-            open(episode.meetingFolder)
+            if let source { open(source.sourceID, source.sourceKind) }
         } label: {
-            Label(BrainUI.date(episode?.startedAt), systemImage: "arrow.up.right.square")
+            Group {
+                if let source {
+                    Label("\(source.sourceKind.label) · \(BrainUI.date(source.sourceDate))", systemImage: source.sourceKind.systemImage)
+                } else if episode != nil {
+                    Label("Deleted source", systemImage: "trash")
+                } else {
+                    Label("Source", systemImage: "arrow.up.right.square")
+                }
+            }
                 .font(.caption)
                 .foregroundStyle(BrainUI.blue)
                 .padding(.horizontal, 7).padding(.vertical, 3)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.blue.opacity(0.09)))
         }
         .buttonStyle(.plain)
-        .disabled(episode == nil || !rec.meetings.contains(where: { $0.folder.path == episode?.meetingFolder }))
-        .help("Open the source meeting")
+        .disabled(source == nil)
+        .help("Open the source")
     }
 }
 
@@ -103,9 +123,9 @@ private struct BrainBuildCard: View {
     var body: some View {
         BrainCard {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Build your Brain from past meetings", systemImage: "sparkles")
+                Label("Build your Brain from saved records", systemImage: "sparkles")
                     .font(.headline)
-                Text("Inferoid will read saved transcripts one at a time and keep the resulting graph on this Mac.")
+                Text("Inferoid will read saved records one at a time and keep the resulting graph on this Mac.")
                     .foregroundStyle(BrainUI.muted)
                 if let progress = rec.brainBackfillProgress {
                     ProgressView(value: progress)
@@ -139,58 +159,68 @@ struct BrainOrbitView: View {
     @State private var matters: [BrainMatterStory] = []
     @State private var world: BrainWorld?
     @State private var upcoming: MeetingCalendarEvent?
+    @State private var nudges: [BrainNudge] = []
+    @State private var dismissedNudges: Set<String> = []
     @State private var error: String?
+    @State private var addingPerson = false
+    @State private var mode: OrbitMode = .orbit
+    @State private var searchText = ""
+    @State private var sort: OrbitListSort = .name
+    @State private var removingPerson: String?
 
     private var visiblePeople: [BrainOrbitPerson] {
         people.filter { world == nil || $0.entity.world == world }
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Orbit").font(.largeTitle.bold())
-                        Text("People and matters arranged by the attention they need.").foregroundStyle(BrainUI.muted)
-                    }
-                    Spacer()
-                    StoredLocally()
+        VStack(spacing: 0) {
+            orbitHeader
+            HStack(spacing: 0) {
+                Group {
+                    if mode == .list { orbitList } else { orbit }
                 }
-                worldFilters
-                if people.isEmpty && matters.isEmpty {
-                    BrainBuildCard()
-                    BrainEmptyState(title: "Your Brain is empty", message: "Record a few meetings, or build it from the meetings already saved on this Mac.")
-                } else {
-                    orbit
-                    needsYou
-                    if !matters.isEmpty { matterPills }
-                    if let upcoming, let person = upcoming.attendeeNames.first,
-                       upcoming.startDate.timeIntervalSince(Date()) <= 15 * 60 {
-                        BrainBriefingCard(personName: person, event: upcoming, pane: $pane)
-                    }
-                    BrainBuildCard()
-                }
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                BrainNudgesAside(nudges: shownNudges, pane: $pane, dismiss: dismissNudge)
             }
-            .padding(28)
-            .frame(maxWidth: 1100, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
         .background(BrainUI.page)
         .navigationTitle("Brain · Orbit")
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search people")
+        .sheet(isPresented: $addingPerson, onDismiss: { load() }) { AddPersonSheet(world: world ?? .friend) }
         .task { load() }
         .task {
             upcoming = await MeetingCalendar.upcomingEvent(within: 30)
         }
+        .onChange(of: mode) { _, value in if value == .promises { pane = .brainPromises; mode = .orbit } }
+        .confirmationDialog("Remove \(removingPerson ?? "") from Orbit?", isPresented: Binding(get: { removingPerson != nil }, set: { if !$0 { removingPerson = nil } }), titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { if let name = removingPerson { removePerson(name) }; removingPerson = nil }
+            Button("Cancel", role: .cancel) { removingPerson = nil }
+        } message: { Text("The Brain forgets what it learned about them. If a future meeting mentions them, they come back as a new person.") }
+    }
+
+    private var orbitHeader: some View {
+        HStack(spacing: 10) {
+            Text("Orbit").font(.title2.weight(.semibold))
+            Picker("View", selection: $mode) {
+                Text("Orbit").tag(OrbitMode.orbit)
+                Text("List").tag(OrbitMode.list)
+                Text("Promises").tag(OrbitMode.promises)
+            }
+            .pickerStyle(.segmented).frame(width: 210)
+            Spacer(minLength: 8)
+            worldFilters
+            Button { addingPerson = true } label: { Label("Add person", systemImage: "person.badge.plus") }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private var worldFilters: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                filterButton(nil, title: "All worlds")
-                ForEach(BrainWorld.allCases.filter { $0 != .unknown }, id: \.self) { item in
-                    filterButton(item, title: BrainUI.label(for: item))
-                }
+        HStack(spacing: 6) {
+            filterButton(nil, title: "All worlds")
+            ForEach([BrainWorld.friend, .family, .business, .mentor, .mentee], id: \.self) { item in
+                filterButton(item, title: BrainUI.label(for: item))
             }
         }
     }
@@ -206,85 +236,40 @@ struct BrainOrbitView: View {
     }
 
     private var orbit: some View {
-        BrainCard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Your orbit").font(.headline)
-                GeometryReader { proxy in
-                    let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                    ZStack {
-                        Circle().stroke(Color.secondary.opacity(0.14), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
-                            .frame(width: min(proxy.size.width, proxy.size.height) * 0.52)
-                        Circle().fill(BrainUI.ink).frame(width: 64, height: 64)
-                            .overlay(Text("You").font(.headline).foregroundStyle(.white))
-                        ForEach(Array(visiblePeople.prefix(40).enumerated()), id: \.offset) { _, person in
-                            let point = orbitPoint(person: person, size: proxy.size)
-                            Button {
-                                if upcoming?.attendeeNames.contains(where: { $0.caseInsensitiveCompare(person.entity.name) == .orderedSame }) == true {
-                                    pane = .brainBriefing(person.entity.name)
-                                } else {
-                                    pane = .brainPerson(person.entity.name)
-                                }
-                            } label: {
-                                VStack(spacing: 3) {
-                                    ZStack {
-                                        if person.hasOpenPromise || person.hasChanged {
-                                            Circle().stroke(BrainUI.color(for: person.entity.world).opacity(0.35), lineWidth: 5)
-                                                .frame(width: 54, height: 54)
-                                        }
-                                        Text(BrainUI.initials(person.entity.name)).font(.caption.weight(.bold)).foregroundStyle(.white)
-                                            .frame(width: 44, height: 44).background(Circle().fill(BrainUI.color(for: person.entity.world)))
-                                            .opacity(isStale(person) ? 0.48 : 1)
-                                    }
-                                    Text(person.entity.name).font(.caption2.weight(.semibold)).lineLimit(1)
-                                }
-                                .frame(width: 104)
-                            }
-                            .buttonStyle(.plain)
-                            .position(point)
-                            .accessibilityLabel("Open dossier for \(person.entity.name)")
-                        }
-                        ForEach(matters.prefix(5), id: \.matter.id) { matter in
-                            Button { pane = .brainMatter(matter.matter.id) } label: {
-                                Text(matter.matter.name).font(.caption.weight(.semibold))
-                                    .foregroundStyle(BrainUI.ink).padding(.horizontal, 9).padding(.vertical, 5)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(BrainUI.panel))
-                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(BrainUI.ink, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .position(x: center.x, y: center.y - 88 - CGFloat(matters.firstIndex(where: { $0.matter.id == matter.matter.id }) ?? 0) * 28)
-                        }
-                    }
+        BrainOrbitCanvas(people: Array(visiblePeople.prefix(40)), matters: matters, upcoming: upcoming, pane: $pane, onRemove: { removingPerson = $0.entity.name })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var orbitList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack { Text("People").font(.headline); Spacer(); Picker("Sort", selection: $sort) { ForEach(OrbitListSort.allCases, id: \.self) { Text($0.title).tag($0) } }.pickerStyle(.menu) }
+            LazyVStack(spacing: 0) {
+                ForEach(sortedListPeople, id: \.entity.id) { person in
+                    Button { pane = .brainPerson(person.entity.name) } label: { OrbitListRow(person: person) }
+                        .buttonStyle(.plain)
+                        .contextMenu { Button("Remove \(person.entity.name)…", role: .destructive) { removingPerson = person.entity.name } }
+                    Divider()
                 }
-                .frame(minHeight: 420)
-                HStack {
-                    Text("Closer means more recent and more frequent. Faded means no contact in 60+ days.")
-                    Spacer()
-                    Text("Glow = an open promise or changed position")
-                }
-                .font(.caption).foregroundStyle(BrainUI.muted)
-            }
+            }.padding(.horizontal, 12).background(RoundedRectangle(cornerRadius: 12).fill(BrainUI.panel))
         }
     }
 
-    private func orbitPoint(person: BrainOrbitPerson, size: CGSize) -> CGPoint {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let scale = min(size.width, size.height)
-        let maxCount = max(1, visiblePeople.map(\.meetingCount).max() ?? 1)
-        let frequency = min(1, log(Double(person.meetingCount + 1)) / log(Double(maxCount + 1)))
-        let recency: Double
-        if let value = person.lastMet, let date = ISO8601DateFormatter().date(from: value) {
-            recency = max(0, 1 - Date().timeIntervalSince(date) / (180 * 24 * 60 * 60))
-        } else { recency = 0 }
-        let relevance = 0.65 * frequency + 0.35 * recency
-        let radius = scale * (0.20 + CGFloat(1 - relevance) * 0.22)
-        let worlds: [BrainWorld] = [.client, .opposing, .court, .team, .personal, .other]
-        let sector = worlds.firstIndex(of: person.entity.world) ?? worlds.count - 1
-        let members = visiblePeople.filter { $0.entity.world == person.entity.world }
-        let position = members.firstIndex(where: { $0.entity.id == person.entity.id }) ?? 0
-        let sectorWidth = (Double.pi * 2) / Double(worlds.count)
-        let angle = -Double.pi / 2 + Double(sector) * sectorWidth + sectorWidth * (0.2 + 0.6 * Double(position + 1) / Double(members.count + 1))
-        let r = Double(radius); return CGPoint(x: Double(center.x) + Foundation.cos(angle) * r, y: Double(center.y) + Foundation.sin(angle) * r)
+    private var sortedListPeople: [BrainOrbitPerson] {
+        let filtered = visiblePeople.filter { searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.entity.name.localizedCaseInsensitiveContains(searchText) }
+        switch sort {
+        case .name: return filtered.sorted { $0.entity.name.localizedCaseInsensitiveCompare($1.entity.name) == .orderedAscending }
+        case .closeness: return filtered.sorted {
+            let left = $0.closenessLevel ?? $0.suggestedClosenessLevel, right = $1.closenessLevel ?? $1.suggestedClosenessLevel
+            return left == right ? $0.entity.name.localizedCaseInsensitiveCompare($1.entity.name) == .orderedAscending : left < right
+        }
+        case .lastMet: return filtered.sorted {
+            let left = lastDate($0) ?? .distantPast, right = lastDate($1) ?? .distantPast
+            return left == right ? $0.entity.name.localizedCaseInsensitiveCompare($1.entity.name) == .orderedAscending : left > right
+        }
+        }
     }
+
+    private func lastDate(_ person: BrainOrbitPerson) -> Date? { person.lastMet.flatMap { ISO8601DateFormatter().date(from: $0) } }
 
     private var needsYou: some View {
         BrainCard {
@@ -311,7 +296,7 @@ struct BrainOrbitView: View {
 
     private var matterPills: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("MATTERS").font(.caption.weight(.bold)).tracking(1).foregroundStyle(BrainUI.muted)
+            Text("TOPICS").font(.caption.weight(.bold)).tracking(1).foregroundStyle(BrainUI.muted)
             FlowLayout(items: matters) { matter in
                 Button { pane = .brainMatter(matter.matter.id) } label: {
                     Text(matter.matter.name).font(.caption.weight(.semibold)).foregroundStyle(BrainUI.ink)
@@ -328,13 +313,238 @@ struct BrainOrbitView: View {
         return Date().timeIntervalSince(date) > 60 * 24 * 60 * 60
     }
 
+    private func removePerson(_ name: String) {
+        do { try BrainStore().forgetPerson(name); load(); rec.reloadMeetings() } catch { self.error = error.localizedDescription }
+    }
+
     private func load() {
         do {
             let store = try BrainStore()
             people = try store.orbitPeople(limit: 40)
             matters = try store.matterStories()
+            nudges = try store.nudges()
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+
+    private var shownNudges: [BrainNudge] {
+        nudges.filter { !dismissedNudges.contains($0.id) && !UserDefaults.standard.bool(forKey: "brain.nudge.dismissed.\($0.id)") }.prefix(5).map { $0 }
+    }
+
+    private func dismissNudge(_ nudge: BrainNudge) {
+        dismissedNudges.insert(nudge.id)
+        UserDefaults.standard.set(true, forKey: "brain.nudge.dismissed.\(nudge.id)")
+    }
+}
+
+private enum OrbitListSort: CaseIterable, Hashable {
+    case name, closeness, lastMet
+    var title: String { switch self { case .name: return "Name"; case .closeness: return "Closeness"; case .lastMet: return "Last met" } }
+}
+
+private struct OrbitListRow: View {
+    let person: BrainOrbitPerson
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(BrainUI.initials(person.entity.name)).font(.caption.bold()).foregroundStyle(.white).frame(width: 34, height: 34).background(Circle().fill(BrainUI.color(for: person.entity.world)))
+            VStack(alignment: .leading, spacing: 3) { Text(person.entity.name).font(.headline); Text(BrainUI.label(for: person.entity.world)).font(.caption).foregroundStyle(BrainUI.muted) }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 3) { Text("Closeness \(person.closenessLevel ?? person.suggestedClosenessLevel)").font(.caption); Text(person.lastMet.map(BrainUI.date) ?? "Never met").font(.caption).foregroundStyle(BrainUI.muted) }
+            Image(systemName: "chevron.right").foregroundStyle(BrainUI.muted)
+        }.padding(.vertical, 10)
+    }
+}
+
+private enum OrbitMode: Hashable { case orbit, list, promises }
+
+private struct BrainOrbitCanvas: View {
+    let people: [BrainOrbitPerson]
+    let matters: [BrainMatterStory]
+    let upcoming: MeetingCalendarEvent?
+    @Binding var pane: Pane?
+    var onRemove: (BrainOrbitPerson) -> Void = { _ in }
+    @State private var zoom: CGFloat = 1
+    @State private var pan = CGSize.zero
+    @State private var dragStart = CGSize.zero
+    @State private var zoomStart: CGFloat = 1
+
+    var body: some View {
+        GeometryReader { proxy in
+            let center = CGPoint(x: proxy.size.width / 2 + pan.width, y: proxy.size.height / 2 + pan.height)
+            let radii = BrainOrbitLayout.radii(people: people, size: proxy.size, zoom: zoom)
+            let layout = BrainOrbitLayout.points(people: people, size: proxy.size, zoom: zoom, offset: pan)
+            ZStack {
+            ZStack {
+                ForEach(Array(radii.enumerated()), id: \.offset) { index, radius in
+                    Circle().stroke(BrainUI.muted.opacity(index == 0 ? 0.32 : 0.22), style: StrokeStyle(lineWidth: 1, dash: index == 0 ? [] : [4, 5]))
+                        .frame(width: radius * 2, height: radius * 2).position(center)
+                }
+                        ZStack {
+                            Circle().fill(BrainUI.ink)
+                            Text("You").font(.headline).foregroundStyle(BrainUI.page)
+                        }
+                        .frame(width: 88, height: 88).position(center)
+                        ForEach(layout, id: \.personID) { point in
+                            if let person = people.first(where: { $0.entity.id == point.personID }) {
+                                Button {
+                                    if upcoming?.attendeeNames.contains(where: { $0.caseInsensitiveCompare(person.entity.name) == .orderedSame }) == true {
+                                        pane = .brainBriefing(person.entity.name)
+                                    } else { pane = .brainPerson(person.entity.name) }
+                                } label: {
+                                    VStack(spacing: 3) {
+                                        let tint = BrainUI.color(for: person.entity.world)
+                                        ZStack {
+                                            if person.hasOpenPromise || person.hasChanged {
+                                                Circle().stroke(Color.orange.opacity(0.55), lineWidth: 4).frame(width: 52, height: 52)
+                                            }
+                                            if person.closenessLevel == nil {
+                                                Text(BrainUI.initials(person.entity.name)).font(.caption.weight(.bold)).foregroundStyle(tint)
+                                                    .frame(width: 40, height: 40)
+                                                    .background(Circle().fill(BrainUI.page))
+                                                    .overlay(Circle().stroke(tint.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+                                            } else {
+                                                Text(BrainUI.initials(person.entity.name)).font(.caption.weight(.bold)).foregroundStyle(.white)
+                                                    .frame(width: 44, height: 44).background(Circle().fill(tint))
+                                            }
+                                        }
+                                        Text(person.closenessLevel == nil ? "\(person.entity.name) · suggested \(point.level)" : person.entity.name)
+                                            .font(.caption2.weight(person.closenessLevel == nil ? .regular : .semibold))
+                                            .foregroundStyle(person.closenessLevel == nil ? BrainUI.muted : BrainUI.ink)
+                                            .lineLimit(1).fixedSize()
+                                            .padding(.horizontal, 4).background(Capsule().fill(BrainUI.page.opacity(0.85)))
+                                    }
+                                    .frame(width: 140)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu { Button("Remove \(person.entity.name)…", role: .destructive) { onRemove(person) } }
+                                .position(point.position)
+                                .accessibilityLabel("Open dossier for \(person.entity.name)")
+                            }
+                        }
+                        ForEach(Array(matters.prefix(5).enumerated()), id: \.offset) { index, matter in
+                            Button { pane = .brainMatter(matter.matter.id) } label: {
+                                Text(matter.matter.name).font(.caption.weight(.semibold)).foregroundStyle(BrainUI.ink)
+                                    .padding(.horizontal, 9).padding(.vertical, 5).background(RoundedRectangle(cornerRadius: 8).fill(BrainUI.panel))
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(BrainUI.ink, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain).position(x: center.x, y: center.y - 88 - CGFloat(index) * 28)
+                        }
+                    }
+                .contentShape(Rectangle())
+                .gesture(DragGesture().onChanged { value in pan = CGSize(width: dragStart.width + value.translation.width, height: dragStart.height + value.translation.height) }
+                    .onEnded { _ in dragStart = pan })
+                .simultaneousGesture(MagnificationGesture().onChanged { value in zoom = min(1.8, max(0.65, zoomStart * value)) }
+                    .onEnded { _ in zoomStart = zoom })
+                .onTapGesture(count: 2) { pan = .zero; dragStart = .zero; zoom = 1; zoomStart = 1 }
+                .background(OrbitScrollCapture { delta in
+                    zoom = min(1.8, max(0.65, zoom * (1 + delta / 500)))
+                    zoomStart = zoom
+                })
+
+                VStack {
+                    Spacer()
+                    HStack(alignment: .bottom) {
+                        HStack(spacing: 6) {
+                            Button("+") { zoom = min(1.8, zoom + 0.1); zoomStart = zoom }.accessibilityLabel("Zoom in")
+                            Button("−") { zoom = max(0.65, zoom - 0.1); zoomStart = zoom }.accessibilityLabel("Zoom out")
+                            Button("Center on You") { pan = .zero; dragStart = .zero }.font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        Text("Drag to move around · pinch or scroll to zoom\nRings 1 (very close) → 5 (far) · glow = open promise · dashed = suggested level")
+                            .font(.caption).foregroundStyle(BrainUI.muted).multilineTextAlignment(.trailing)
+                    }
+                    .padding(16)
+                }
+            }
+            .background(BrainUI.page)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct OrbitScrollCapture: NSViewRepresentable {
+    let onScroll: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> OrbitWheelView {
+        let view = OrbitWheelView()
+        view.onScroll = onScroll
+        return view
+    }
+
+    func updateNSView(_ nsView: OrbitWheelView, context: Context) {
+        nsView.onScroll = onScroll
+    }
+}
+
+private final class OrbitWheelView: NSView {
+    var onScroll: ((CGFloat) -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        onScroll?(event.scrollingDeltaY)
+    }
+}
+
+private struct BrainNudgesCard: View {
+    let nudges: [BrainNudge]
+    @Binding var pane: Pane?
+    let dismiss: (BrainNudge) -> Void
+
+    var body: some View {
+        BrainCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("NUDGES").font(.caption.weight(.bold)).tracking(1).foregroundStyle(BrainUI.muted)
+                ForEach(nudges) { nudge in
+                    HStack(spacing: 8) {
+                        Button { if let person = nudge.personName { pane = .brainPerson(person) } } label: {
+                            VStack(alignment: .leading, spacing: 2) { Text(nudge.title).fontWeight(.semibold); Text(nudge.detail).font(.caption).foregroundStyle(BrainUI.muted) }
+                        }.buttonStyle(.plain)
+                        Spacer()
+                        Button("Dismiss") { dismiss(nudge) }.buttonStyle(.borderless).font(.caption)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BrainNudgesAside: View {
+    let nudges: [BrainNudge]
+    @Binding var pane: Pane?
+    let dismiss: (BrainNudge) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("For you today").font(.headline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(nudges) { nudge in
+                        BrainCard {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("NUDGE").font(.caption2.weight(.bold)).tracking(0.7).foregroundStyle(BrainUI.orange)
+                                Button {
+                                    if let person = nudge.personName { pane = .brainPerson(person) }
+                                } label: {
+                                    Text(nudge.title).font(.subheadline.weight(.semibold)).foregroundStyle(BrainUI.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }.buttonStyle(.plain)
+                                Text(nudge.detail).font(.caption).foregroundStyle(BrainUI.muted).fixedSize(horizontal: false, vertical: true)
+                                HStack {
+                                    if nudge.personName != nil { Button("Chat about") { if let name = nudge.personName { pane = .brainPerson(name) } }.buttonStyle(.link) }
+                                    Spacer()
+                                    Button("Dismiss") { dismiss(nudge) }.buttonStyle(.borderless).font(.caption)
+                                }
+                            }
+                        }
+                    }
+                    if nudges.isEmpty { Text("Nothing needs your attention today.").foregroundStyle(BrainUI.muted) }
+                }
+            }
+            Spacer()
+        }
+        .padding(20).frame(width: 300, alignment: .topLeading)
+        .background(BrainUI.panel.opacity(0.45))
+        .overlay(alignment: .leading) { Divider() }
     }
 }
 
@@ -371,26 +581,48 @@ struct BrainPersonView: View {
     let name: String
     @State private var dossier: BrainPersonDossier?
     @State private var showKnowledge = false
+    @State private var showEdit = false
     @State private var error: String?
+    @State private var trips: [Trip] = []
+    @State private var confirmRemove = false
+    @State private var chatDraft = ""
+    @State private var noImport = false
+    @ObservedObject private var chatStore = ChatStore.shared
 
     var body: some View {
         ScrollView {
             if let dossier {
-                VStack(alignment: .leading, spacing: 16) {
-                    header(dossier)
-                    BrainCard {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("WHAT THEY CARE ABOUT").font(.caption.weight(.bold)).tracking(1).foregroundStyle(BrainUI.muted)
-                            Text(dossier.entity.summary.isEmpty ? "No summary has been extracted yet." : dossier.entity.summary)
-                                .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        header(dossier)
+                        closenessPicker(dossier)
+                        ProjectComposer(projectName: name, placeholder: "Chat about \(name)", showsAttach: false,
+                                        draft: $chatDraft, importing: $noImport, send: { startChat($0) })
+                        personChats
+                    }
+                    .frame(width: 400, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 8) {
+                            Spacer()
+                            Button("What the Brain knows") { showKnowledge = true }.buttonStyle(.bordered)
                         }
+                        personalDetails(dossier)
+                        tripLinks
+                        BrainCard {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("WHAT THEY CARE ABOUT").font(.caption.weight(.bold)).tracking(1).foregroundStyle(BrainUI.muted)
+                                Text(dossier.entity.summary.isEmpty ? "Nothing yet. It fills in from your meetings and notes." : dossier.entity.summary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        HStack(alignment: .top, spacing: 16) {
+                            PromiseColumn(title: "You owe \(dossier.entity.name)", facts: dossier.openCommitmentsByPerson, dossier: dossier, pane: $pane)
+                            PromiseColumn(title: "\(dossier.entity.name) owes you", facts: dossier.openCommitmentsToPerson, dossier: dossier, pane: $pane)
+                        }
+                        if !dossier.positionHistory.isEmpty { positions(dossier) }
+                        meetings(dossier)
                     }
-                    HStack(alignment: .top, spacing: 16) {
-                        PromiseColumn(title: "You owe \(dossier.entity.name)", facts: dossier.openCommitmentsByPerson, dossier: dossier, pane: $pane)
-                        PromiseColumn(title: "\(dossier.entity.name) owes you", facts: dossier.openCommitmentsToPerson, dossier: dossier, pane: $pane)
-                    }
-                    positions(dossier)
-                    meetings(dossier)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .padding(28)
                 .frame(maxWidth: 1100, alignment: .leading)
@@ -398,32 +630,156 @@ struct BrainPersonView: View {
                 .sheet(isPresented: $showKnowledge) {
                     BrainKnowledgeSheet(dossier: dossier, isPresented: $showKnowledge)
                 }
+                .sheet(isPresented: $showEdit, onDismiss: { load() }) {
+                    BrainPersonEditSheet(dossier: dossier, isPresented: $showEdit)
+                }
             } else {
                 BrainEmptyState(title: "No dossier found", message: "The Brain does not know \(name) yet.").padding(28)
             }
         }
         .background(BrainUI.page)
         .navigationTitle("Brain · \(name)")
+        .toolbar { if dossier != nil { Button("Remove from Orbit", role: .destructive) { confirmRemove = true } } }
+        .confirmationDialog("Remove \(name) from Orbit?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                do { try BrainStore().forgetPerson(name); rec.reloadMeetings(); pane = .brainOrbit } catch { self.error = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The Brain forgets what it learned about them. If a future meeting mentions them, they come back as a new person.") }
         .task { load() }
         .overlay(alignment: .bottom) { if let error { Text(error).font(.caption).foregroundStyle(.red).padding() } }
     }
 
     private func header(_ dossier: BrainPersonDossier) -> some View {
         HStack(spacing: 14) {
-            Text(BrainUI.initials(dossier.entity.name)).font(.title.bold()).foregroundStyle(.white)
-                .frame(width: 64, height: 64).background(Circle().fill(BrainUI.color(for: dossier.entity.world)))
+            Text(BrainUI.initials(dossier.entity.name)).font(.title2.bold()).foregroundStyle(.white)
+                .frame(width: 56, height: 56).background(Circle().fill(BrainUI.color(for: dossier.entity.world)))
             VStack(alignment: .leading, spacing: 4) {
-                Text(dossier.entity.name).font(.largeTitle.bold())
-                Text(dossier.entity.summary.isEmpty ? "Person in your meetings" : dossier.entity.summary)
-                    .foregroundStyle(BrainUI.muted).lineLimit(2)
+                Text(dossier.entity.name).font(.title.bold()).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(BrainUI.label(for: dossier.entity.world)).font(.caption.weight(.semibold)).foregroundStyle(BrainUI.color(for: dossier.entity.world))
+                        .padding(.horizontal, 8).padding(.vertical, 3).background(Capsule().fill(BrainUI.color(for: dossier.entity.world).opacity(0.14)))
+                    Text(dossier.meetings.isEmpty ? "No meetings yet" : "Last met \(BrainUI.date(dossier.meetings.first?.startedAt)) · \(dossier.meetings.count) meeting\(dossier.meetings.count == 1 ? "" : "s")")
+                        .font(.caption).foregroundStyle(BrainUI.muted)
+                }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 8) {
-                Text(BrainUI.label(for: dossier.entity.world)).font(.caption.weight(.semibold)).foregroundStyle(BrainUI.color(for: dossier.entity.world))
-                    .padding(.horizontal, 10).padding(.vertical, 5).background(Capsule().fill(BrainUI.color(for: dossier.entity.world).opacity(0.12)))
-                Text("Last met \(BrainUI.date(dossier.meetings.first?.startedAt))").font(.caption).foregroundStyle(BrainUI.muted)
-                Button("What the Brain knows") { showKnowledge = true }.buttonStyle(.bordered)
+        }
+    }
+
+    private func closenessPicker(_ dossier: BrainPersonDossier) -> some View {
+        let suggested = BrainCloseness.suggestedLevel(meetingCount: dossier.meetings.count,
+                                                       lastMet: dossier.meetings.first.flatMap { ISO8601DateFormatter().date(from: $0.startedAt) })
+        let current = dossier.entity.closenessLevel
+        let labels = ["Very close", "Close", "Regular", "Some", "Far"]
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("How close").font(.caption.weight(.semibold))
+                Spacer()
+                if current == nil { Text("suggested \(suggested)").font(.caption).foregroundStyle(BrainUI.muted) }
             }
+            HStack(spacing: 4) {
+                ForEach(1...5, id: \.self) { level in
+                    let selected = (current ?? 0) == level
+                    Button { setCloseness(selected ? nil : level) } label: {
+                        VStack(spacing: 1) {
+                            Text("\(level)").font(.callout.weight(.semibold))
+                            Text(labels[level - 1]).font(.system(size: 9))
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                        .foregroundStyle(selected ? Color.white : BrainUI.ink)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Color.accentColor : BrainUI.panel))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(current == nil && level == suggested ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.18),
+                                                                               style: StrokeStyle(lineWidth: 1, dash: current == nil && level == suggested ? [3, 2] : [])))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var personChats: some View {
+        let threads = PersonChats.ids(for: name).compactMap { chatStore.thread($0) }.filter { !$0.messages.isEmpty }.sorted { $0.updated > $1.updated }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("CHATS").font(.caption.weight(.bold)).tracking(1.2).foregroundStyle(BrainUI.muted)
+            if threads.isEmpty {
+                Text("Ask anything about \(name): what to get them, what you last talked about, what they care about.")
+                    .font(.callout).foregroundStyle(BrainUI.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(threads) { thread in
+                Button { pane = .personChat(name, thread.id) } label: {
+                    ProjectChatRow(thread: thread) { PersonChats.remove(thread.id, from: name); chatStore.delete(thread.id) }
+                }
+                .buttonStyle(.plain)
+                .contextMenu { Button("Delete chat", role: .destructive) { PersonChats.remove(thread.id, from: name); chatStore.delete(thread.id) } }
+            }
+        }
+    }
+
+    private func startChat(_ text: String) {
+        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        let id = ChatStore.shared.newThread(id: UUID())
+        PersonChats.add(id, to: name)
+        chatDraft = ""
+        pane = .personChat(name, id)
+        ChatStore.shared.send(question, in: id, model: rec.model, meetings: rec.meetings, projects: ProjectStore.shared.projects, person: name)
+    }
+
+    private func setCloseness(_ level: Int?) {
+        do { try BrainStore().setClosenessLevel(level, forPerson: name); load() } catch { self.error = error.localizedDescription }
+    }
+
+    private func personalDetails(_ dossier: BrainPersonDossier) -> some View {
+        BrainCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack { Text("Personal details").font(.headline); Spacer(); Text(dossier.details.includeInBrain ? "In Brain" : "Not in Brain").font(.caption).foregroundStyle(BrainUI.muted) }
+                let notes = (dossier.details.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if dossier.details.likes.isEmpty && dossier.details.dislikes.isEmpty && dossier.details.importantDates.isEmpty && notes.isEmpty && dossier.details.learned.isEmpty {
+                    Text("Nothing saved yet.").foregroundStyle(BrainUI.muted)
+                }
+                detailLine("Likes", values: dossier.details.likes)
+                detailLine("Dislikes", values: dossier.details.dislikes)
+                detailLine("Dates", values: dossier.details.importantDates)
+                if !notes.isEmpty { detailRow("Notes", notes) }
+                if !dossier.details.learned.isEmpty {
+                    Divider()
+                    Text("Learned from meetings").font(.caption.weight(.semibold)).foregroundStyle(BrainUI.muted)
+                    ForEach(dossier.details.learned, id: \.self) { item in
+                        HStack(alignment: .top) {
+                            Text("\(item.category.capitalized): \(item.value)")
+                            Spacer()
+                            BrainSourceChip(episode: dossier.meetings.first(where: { $0.id == item.sourceEpisodeID })) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
+                        }
+                    }
+                }
+                Button("Edit details") { showEdit = true }.buttonStyle(.bordered)
+            }
+        }
+    }
+
+    @ViewBuilder private var tripLinks: some View {
+        if !trips.isEmpty {
+            BrainCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Travels with " + name).font(.headline)
+                    ForEach(trips) { trip in
+                        Button { pane = .content(.trip, trip.id.uuidString) } label: {
+                            HStack { Image(systemName: "airplane"); Text(trip.title.isEmpty ? trip.place : trip.title); Spacer(); Text(trip.startDate.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(BrainUI.muted); Image(systemName: "chevron.right").foregroundStyle(BrainUI.muted) }
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func detailLine(_ title: String, values: [String]) -> some View {
+        if !values.isEmpty { detailRow(title, values.joined(separator: ", ")) }
+    }
+
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title).font(.caption).foregroundStyle(BrainUI.muted).frame(width: 64, alignment: .leading)
+            Text(value).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }
 
@@ -442,7 +798,7 @@ struct BrainPersonView: View {
                                 .strikethrough(fact.invalidatedAt != nil)
                             Text(BrainUI.date(fact.validFrom)).font(.caption).foregroundStyle(BrainUI.muted)
                             Spacer()
-                            BrainSourceChip(episode: dossier.meetings.first(where: { $0.id == fact.episodeID })) { path in pane = .meeting(path) }
+                            BrainSourceChip(episode: dossier.meetings.first(where: { $0.id == fact.episodeID })) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
                         }
                     }
                 }
@@ -453,7 +809,8 @@ struct BrainPersonView: View {
     private func meetings(_ dossier: BrainPersonDossier) -> some View {
         BrainCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Every meeting with \(dossier.entity.name)").font(.headline)
+                Text("Meetings with \(dossier.entity.name)").font(.headline)
+                if dossier.meetings.isEmpty { Text("None yet. Meetings where \(dossier.entity.name) speaks or is invited show up here.").foregroundStyle(BrainUI.muted) }
                 ForEach(dossier.meetings, id: \.id) { meeting in
                     Button { pane = .meeting(meeting.meetingFolder) } label: {
                         HStack {
@@ -468,7 +825,81 @@ struct BrainPersonView: View {
     }
 
     private func load() {
-        do { dossier = try BrainStore().personDossier(name) } catch { self.error = error.localizedDescription }
+        do { dossier = try BrainStore().personDossier(name); trips = TravelStore.trips(forPerson: name) } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct BrainPersonEditSheet: View {
+    let dossier: BrainPersonDossier
+    @Binding var isPresented: Bool
+    @State private var closeness = 0
+    @State private var includeInBrain = true
+    @State private var likes = ""
+    @State private var dislikes = ""
+    @State private var importantDates = ""
+    @State private var notes = ""
+    @State private var error: String?
+
+    init(dossier: BrainPersonDossier, isPresented: Binding<Bool>) {
+        self.dossier = dossier; self._isPresented = isPresented
+        _closeness = State(initialValue: dossier.entity.closenessLevel ?? 0)
+        _includeInBrain = State(initialValue: dossier.details.includeInBrain)
+        _likes = State(initialValue: dossier.details.likes.joined(separator: "\n"))
+        _dislikes = State(initialValue: dossier.details.dislikes.joined(separator: "\n"))
+        _importantDates = State(initialValue: dossier.details.importantDates.joined(separator: "\n"))
+        _notes = State(initialValue: dossier.details.notes ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit \(dossier.entity.name)").font(.title2.bold())
+            Form {
+                Picker("Closeness", selection: $closeness) {
+                    Text("Not set").tag(0)
+                    ForEach(1...5, id: \.self) { Text("\($0) · \(closenessLabel($0))").tag($0) }
+                }
+                Toggle("Include personal details in Brain", isOn: $includeInBrain)
+                detailEditor("Likes", text: $likes)
+                detailEditor("Dislikes / allergies", text: $dislikes)
+                detailEditor("Important dates", text: $importantDates)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Notes").font(.caption.weight(.semibold))
+                    TextEditor(text: $notes).font(.body).frame(minHeight: 110).overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.2)))
+                    Text("Anything worth remembering about them. The Brain uses it in chat and briefs.").font(.caption2).foregroundStyle(BrainUI.muted)
+                }
+            }.formStyle(.grouped)
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            HStack { StoredLocally(); Spacer(); Button("Cancel") { isPresented = false }; Button("Save") { save() }.buttonStyle(.borderedProminent) }
+        }
+        .padding(24).frame(width: 540, height: 570)
+    }
+
+    private func detailEditor(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.weight(.semibold))
+            TextEditor(text: text).font(.body).frame(minHeight: 42).overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.2)))
+            Text("One item per line").font(.caption2).foregroundStyle(BrainUI.muted)
+        }
+    }
+
+    private func closenessLabel(_ value: Int) -> String {
+        switch value { case 1: return "very close"; case 2: return "close"; case 3: return "in touch"; case 4: return "distant"; default: return "far" }
+    }
+
+    private func save() {
+        let details = BrainPersonDetails(includeInBrain: includeInBrain, likes: lines(likes), dislikes: lines(dislikes),
+                                         familyNames: dossier.details.familyNames, importantDates: lines(importantDates),
+                                         giftIdeas: dossier.details.giftIdeas, notes: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+        do {
+            let store = try BrainStore()
+            try store.setClosenessLevel(closeness == 0 ? nil : closeness, forPerson: dossier.entity.name)
+            try store.updatePersonDetails(forPerson: dossier.entity.name, details: details)
+            isPresented = false
+        } catch let caught { self.error = caught.localizedDescription }
+    }
+
+    private func lines(_ text: String) -> [String] {
+        text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
 
@@ -487,7 +918,7 @@ private struct PromiseColumn: View {
                     HStack(alignment: .top) {
                         Text(fact.value.isEmpty ? fact.predicate : fact.value)
                         Spacer()
-                        BrainSourceChip(episode: dossier.meetings.first(where: { $0.id == fact.episodeID })) { path in pane = .meeting(path) }
+                        BrainSourceChip(episode: dossier.meetings.first(where: { $0.id == fact.episodeID })) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
                     }
                 }
             }
@@ -501,29 +932,67 @@ private struct BrainKnowledgeSheet: View {
     @Binding var isPresented: Bool
     @State private var facts: [BrainFact] = []
 
+    private var manual: [(String, String)] {
+        var rows: [(String, String)] = []
+        let d = dossier.details
+        if !dossier.entity.summary.isEmpty { rows.append(("Who they are", dossier.entity.summary)) }
+        if let notes = d.notes, !notes.isEmpty { rows.append(("Notes", notes)) }
+        if !d.likes.isEmpty { rows.append(("Likes", d.likes.joined(separator: ", "))) }
+        if !d.dislikes.isEmpty { rows.append(("Dislikes", d.dislikes.joined(separator: ", "))) }
+        if !d.importantDates.isEmpty { rows.append(("Dates", d.importantDates.joined(separator: ", "))) }
+        return rows
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack { Text("What the Brain knows about \(dossier.entity.name)").font(.title2.bold()); Spacer(); Button("Done") { isPresented = false } }
-            Text("These are extracted from local meeting transcripts. Forget removes them from the Brain without deleting the meeting.")
-                .foregroundStyle(BrainUI.muted)
-            List(facts, id: \.id) { fact in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(fact.value.isEmpty ? fact.predicate : fact.value)
-                    Text(fact.kind.rawValue.capitalized).font(.caption).foregroundStyle(BrainUI.muted)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    section("From your notes", empty: "You haven't written anything about \(dossier.entity.name) yet. Use Edit details on their page.", isEmpty: manual.isEmpty) {
+                        ForEach(manual, id: \.0) { row in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(row.0).font(.caption).foregroundStyle(BrainUI.muted).frame(width: 90, alignment: .leading)
+                                Text(row.1).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    section("From meetings", empty: "Nothing learned from meetings yet. Facts appear after a meeting with \(dossier.entity.name) is processed.", isEmpty: facts.isEmpty) {
+                        ForEach(facts, id: \.id) { fact in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(fact.value.isEmpty ? fact.predicate : fact.value).fixedSize(horizontal: false, vertical: true)
+                                Text("\(fact.kind.rawValue.capitalized) · \(BrainUI.date(fact.validFrom))").font(.caption).foregroundStyle(BrainUI.muted)
+                            }
+                        }
+                    }
+                    section("Meetings", empty: "No meetings with \(dossier.entity.name) yet.", isEmpty: dossier.meetings.isEmpty) {
+                        ForEach(dossier.meetings, id: \.id) { meeting in
+                            Text(BrainUI.date(meeting.startedAt))
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Button("Forget what the Brain knows about this person", role: .destructive) {
-                if let store = try? BrainStore() {
-                    for fact in facts { try? store.applyCorrection(factID: fact.id, action: "forget") }
+            if !facts.isEmpty {
+                Button("Forget what meetings taught the Brain about this person", role: .destructive) {
+                    if let store = try? BrainStore() {
+                        for fact in facts { try? store.applyCorrection(factID: fact.id, action: "forget") }
+                    }
+                    isPresented = false
                 }
-                isPresented = false
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
             StoredLocally()
         }
         .padding(24)
-        .frame(minWidth: 470, minHeight: 400)
+        .frame(minWidth: 520, minHeight: 460)
         .task { facts = (try? BrainStore().factsForPerson(dossier.entity.name)) ?? [] }
+    }
+
+    @ViewBuilder private func section<Content: View>(_ title: String, empty: String, isEmpty: Bool, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            if isEmpty { Text(empty).foregroundStyle(BrainUI.muted).fixedSize(horizontal: false, vertical: true) } else { content() }
+        }
     }
 }
 
@@ -532,7 +1001,9 @@ struct BrainPromisesView: View {
     @Binding var pane: Pane?
     @State private var items: [BrainPromiseItem] = []
     @State private var snoozed: [Int64: Date] = [:]
+    @State private var showClosed = false
     @State private var error: String?
+    @State private var orbitMode: OrbitMode = .promises
 
     private var shown: [BrainPromiseItem] {
         items.filter { item in
@@ -541,15 +1012,32 @@ struct BrainPromisesView: View {
         }
     }
 
+    private var openItems: [BrainPromiseItem] { shown.filter { !$0.fact.done && $0.fact.invalidatedAt == nil } }
+    private var closedItems: [BrainPromiseItem] { shown.filter { $0.fact.done || $0.fact.invalidatedAt != nil } }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack { VStack(alignment: .leading, spacing: 4) { Text("Promises").font(.largeTitle.bold()); Text("From your meetings. Nobody typed these in.").foregroundStyle(BrainUI.muted) }; Spacer(); StoredLocally() }
-                if shown.isEmpty { BrainEmptyState(title: "No open promises", message: "When a meeting contains a commitment, it will appear here with its source.") }
+                HStack(spacing: 10) {
+                    Text("Orbit").font(.title2.weight(.semibold))
+                    Picker("View", selection: $orbitMode) {
+                        Text("Orbit").tag(OrbitMode.orbit); Text("List").tag(OrbitMode.list); Text("Promises").tag(OrbitMode.promises)
+                    }.pickerStyle(.segmented).frame(width: 210)
+                    Spacer(); StoredLocally()
+                }
+                if openItems.isEmpty { BrainEmptyState(title: "No open promises", message: "When a meeting contains a commitment, it will appear here with its source.") }
                 else {
                     HStack(alignment: .top, spacing: 16) {
-                        promiseColumn("I owe", items: shown.filter(\.iOwe))
-                        promiseColumn("Owed to me", items: shown.filter { !$0.iOwe })
+                        promiseColumn("I owe", items: openItems.filter(\.iOwe))
+                        promiseColumn("Owed to me", items: openItems.filter { !$0.iOwe })
+                    }
+                }
+                if !closedItems.isEmpty {
+                    DisclosureGroup("Done and cancelled (\(closedItems.count))", isExpanded: $showClosed) {
+                        HStack(alignment: .top, spacing: 16) {
+                            promiseColumn("I owed", items: closedItems.filter(\.iOwe))
+                            promiseColumn("Was owed to me", items: closedItems.filter { !$0.iOwe })
+                        }.padding(.top, 8)
                     }
                 }
             }
@@ -558,12 +1046,13 @@ struct BrainPromisesView: View {
         .background(BrainUI.page)
         .navigationTitle("Brain · Promises")
         .task { load() }
+        .onChange(of: orbitMode) { _, value in if value != .promises { pane = .brainOrbit } }
         .overlay(alignment: .bottom) { if let error { Text(error).font(.caption).foregroundStyle(.red).padding() } }
     }
 
     private func promiseColumn(_ title: String, items: [BrainPromiseItem]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Text(title).font(.headline); Spacer(); Text("\(items.count) open").font(.caption).foregroundStyle(BrainUI.muted) }
+            HStack { Text(title).font(.headline); Spacer(); Text("\(items.count)").font(.caption).foregroundStyle(BrainUI.muted) }
             ForEach(items, id: \.fact.id) { item in promiseCard(item) }
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .topLeading)
@@ -583,11 +1072,15 @@ struct BrainPromisesView: View {
                 Text("\(item.iOwe ? "To" : "From") \(item.otherPartyName ?? "another meeting participant") · promised \(BrainUI.date(item.fact.validFrom))")
                     .font(.caption).foregroundStyle(BrainUI.muted)
                 HStack {
-                    Button("Done") { correct(item, action: "done") }.buttonStyle(.bordered)
-                    Button(item.iOwe ? "Draft follow-up" : "Draft a nudge") { draft(item) }.buttonStyle(.borderedProminent)
-                    Button("Snooze") { snooze(item) }.buttonStyle(.bordered)
+                    if item.fact.done || item.fact.invalidatedAt != nil {
+                        Text(item.fact.done ? "Done" : "Cancelled").font(.caption).foregroundStyle(BrainUI.muted)
+                    } else {
+                        Button("Done") { correct(item, action: "done") }.buttonStyle(.bordered)
+                        Button(item.iOwe ? "Draft follow-up" : "Draft a nudge") { draft(item) }.buttonStyle(.borderedProminent)
+                        Button("Snooze") { snooze(item) }.buttonStyle(.bordered)
+                    }
                     Spacer()
-                    BrainSourceChip(episode: item.episode) { path in pane = .meeting(path) }
+                    BrainSourceChip(episode: item.episode) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
                 }
             }
         }
@@ -618,7 +1111,7 @@ struct BrainPromisesView: View {
 
     private func load() {
         do {
-            items = try BrainStore().openPromiseItems()
+            items = try BrainStore().promiseItems()
             for item in items {
                 let key = "brain.snooze.\(item.fact.id)"
                 if let value = UserDefaults.standard.object(forKey: key) as? Double { snoozed[item.fact.id] = Date(timeIntervalSince1970: value) }
@@ -634,6 +1127,8 @@ struct BrainBriefingCard: View {
     @Binding var pane: Pane?
     @State private var dossier: BrainPersonDossier?
 
+    private var matchedName: String { dossier?.entity.name ?? personName }
+
     var body: some View {
         BrainCard {
             VStack(alignment: .leading, spacing: 12) {
@@ -643,8 +1138,8 @@ struct BrainBriefingCard: View {
                     Spacer(); StoredLocally()
                 }
                 HStack(spacing: 12) {
-                    Text(BrainUI.initials(personName)).font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(Circle().fill(BrainUI.orange))
-                    VStack(alignment: .leading) { Text("Call with \(personName)").font(.title3.bold()); Text(event.title).font(.caption).foregroundStyle(BrainUI.muted) }
+                    Text(BrainUI.initials(matchedName)).font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(Circle().fill(BrainUI.orange))
+                    VStack(alignment: .leading) { Text("Call with \(matchedName)").font(.title3.bold()); Text(event.title).font(.caption).foregroundStyle(BrainUI.muted) }
                 }
                 briefingLines
                 HStack {
@@ -653,7 +1148,10 @@ struct BrainBriefingCard: View {
                 }
             }
         }
-        .task { dossier = try? BrainStore().personDossier(personName) }
+        .task {
+            let identifiers = [personName] + event.attendeeEmails
+            dossier = try? BrainStore().personDossier(matching: identifiers)
+        }
     }
 
     private var briefingLines: some View {
@@ -661,7 +1159,12 @@ struct BrainBriefingCard: View {
             Text("Last time: \(dossier?.meetings.first.map { BrainUI.date($0.startedAt) } ?? "No previous meeting")")
             Text("You promised: \(dossier?.openCommitmentsByPerson.first.map { $0.value.isEmpty ? $0.predicate : $0.value } ?? "Nothing open extracted")")
             Text("They promised: \(dossier?.openCommitmentsToPerson.first.map { $0.value.isEmpty ? $0.predicate : $0.value } ?? "Nothing open extracted")")
-            Text("Moved since: \(dossier?.positionHistory.first(where: { $0.invalidatedAt == nil }).map { $0.value } ?? "No changed position found")")
+            if let dossier, let old = dossier.positionHistory.first(where: { $0.invalidatedAt != nil && $0.supersededBy != nil }),
+               let current = dossier.positionHistory.first(where: { $0.id == old.supersededBy }) {
+                Text("Changed since last: \(old.value) → \(current.value)")
+            } else { Text("Changed since last: No replaced facts found") }
+            let details = dossier?.details.likes.prefix(2).joined(separator: ", ") ?? ""
+            if !details.isEmpty { Text("They like: \(details)") }
             Text("Unanswered: Review the source meeting for questions not yet resolved.").foregroundStyle(BrainUI.muted)
         }
         .font(.callout)
@@ -728,8 +1231,8 @@ struct BrainChangesView: View {
 
     private var conflictColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Conflict check").font(.largeTitle.bold())
-            TextField("New client or party", text: $search)
+            Text("Find connections").font(.largeTitle.bold())
+            TextField("New person or group", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: search) { _, value in
                     guard let store = try? BrainStore() else { return }
@@ -771,7 +1274,7 @@ private struct BrainChangeCard: View {
         BrainCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text(fact.predicate.uppercased()).font(.caption.weight(.bold)).foregroundStyle(BrainUI.color(for: .team))
+                    Text(fact.predicate.uppercased()).font(.caption.weight(.bold)).foregroundStyle(BrainUI.color(for: .business))
                     if fact.status == "unverified" { Text("UNVERIFIED").font(.caption2.weight(.bold)).foregroundStyle(BrainUI.muted).padding(3).overlay(RoundedRectangle(cornerRadius: 4).stroke(BrainUI.muted)) }
                     Spacer(); Text(BrainUI.date(fact.validFrom)).font(.caption).foregroundStyle(BrainUI.muted)
                 }
@@ -780,7 +1283,7 @@ private struct BrainChangeCard: View {
                     Text(fact.value.isEmpty ? fact.quote : fact.value).fontWeight(.bold)
                 } else { Text(fact.value.isEmpty ? fact.quote : fact.value).fontWeight(.bold) }
                 HStack {
-                    BrainSourceChip(episode: try? BrainStore().episode(id: fact.episodeID)) { path in pane = .meeting(path) }
+                    BrainSourceChip(episode: try? BrainStore().episode(id: fact.episodeID)) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
                     Spacer()
                     if !corrected {
                         Button(fact.status == "unverified" ? "Confirm" : "Correct") { apply("confirm") }.buttonStyle(.bordered)
@@ -807,7 +1310,7 @@ struct BrainMatterView: View {
         ScrollView {
             if let story {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .firstTextBaseline) { VStack(alignment: .leading) { Text(story.matter.name).font(.largeTitle.bold()); Text("Matter story · \(story.episodes.count) meetings").foregroundStyle(BrainUI.muted) }; Spacer(); StoredLocally() }
+                    HStack(alignment: .firstTextBaseline) { VStack(alignment: .leading) { Text(story.matter.name).font(.largeTitle.bold()); Text("Topic story · \(story.episodes.count) meetings").foregroundStyle(BrainUI.muted) }; Spacer(); StoredLocally() }
                     if story.facts.isEmpty { BrainEmptyState(title: "No story yet", message: "Positions and commitments extracted from meetings will form this chronology.") }
                     else {
                         ForEach(story.parties + [BrainEntity(id: -1, kind: .person, name: "You", world: .unknown, summary: "", createdAt: "", updatedAt: "", forgotten: false)], id: \.id) { party in
@@ -816,9 +1319,9 @@ struct BrainMatterView: View {
                     }
                     HStack(spacing: 14) { Text("Solid = current position"); Text("Light = earlier position"); Text("Dashed = open commitment") }.font(.caption).foregroundStyle(BrainUI.muted)
                 }.padding(28).frame(maxWidth: 1100, alignment: .leading).frame(maxWidth: .infinity)
-            } else { BrainEmptyState(title: "Matter not found", message: "This matter has not been extracted yet.").padding(28) }
+            } else { BrainEmptyState(title: "Topic not found", message: "This topic has not been extracted yet.").padding(28) }
         }
-        .background(BrainUI.page).navigationTitle("Brain · Matter story")
+        .background(BrainUI.page).navigationTitle("Brain · Topic story")
         .task { story = (try? BrainStore().matterStories())?.first(where: { $0.matter.id == matterID }) }
     }
 
@@ -836,10 +1339,107 @@ struct BrainMatterView: View {
                         Circle().fill(fact.invalidatedAt == nil ? BrainUI.color(for: party.world) : BrainUI.color(for: party.world).opacity(0.25)).frame(width: 9, height: 9).padding(.top, 5)
                         Text(fact.value.isEmpty ? fact.predicate : fact.value).fontWeight(fact.invalidatedAt == nil ? .semibold : .regular).strikethrough(fact.invalidatedAt != nil)
                         Spacer(); Text(BrainUI.date(fact.validFrom)).font(.caption).foregroundStyle(BrainUI.muted)
-                        BrainSourceChip(episode: story.episodes.first(where: { $0.id == fact.episodeID })) { path in pane = .meeting(path) }
+                        BrainSourceChip(episode: story.episodes.first(where: { $0.id == fact.episodeID })) { sourceID, kind in pane = sourcePane(sourceID: sourceID, kind: kind) }
                     }
                 }
             }
         }
+    }
+}
+
+
+/// Adds a person by hand: name, world, who they are, email. Saved only on this Mac.
+struct AddPersonSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var world: BrainWorld
+    @State private var name = ""
+    @State private var summary = ""
+    @State private var email = ""
+    @State private var notes = ""
+    @State private var closeness = 0
+    @State private var error: String?
+
+    private let worlds: [BrainWorld] = [.friend, .family, .business, .mentor, .mentee, .other]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add person").font(.title2.bold())
+            Form {
+                TextField("Name", text: $name)
+                Picker("World", selection: $world) {
+                    ForEach(worlds, id: \.self) { item in Text(item.rawValue.capitalized).tag(item) }
+                }
+                Picker("Closeness", selection: $closeness) {
+                    Text("Not set (suggested)").tag(0)
+                    ForEach(1...5, id: \.self) { Text("\($0) · \(closenessLabel($0))").tag($0) }
+                }
+                TextField("Who they are (role, company, what they care about)", text: $summary, axis: .vertical)
+                    .lineLimit(2...4)
+                TextField("Email (optional, links calendar invites to them)", text: $email)
+                TextField("Notes (anything worth remembering)", text: $notes, axis: .vertical)
+                    .lineLimit(3...8)
+            }
+            .formStyle(.grouped)
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            HStack {
+                StoredLocally()
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Add") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private func save() {
+        do {
+            let store = try BrainStore()
+            _ = try store.addPerson(name: name, world: world, summary: summary, email: email.isEmpty ? nil : email,
+                                    closenessLevel: closeness == 0 ? nil : closeness)
+            let cleanNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanNotes.isEmpty {
+                try store.updatePersonDetails(forPerson: name.trimmingCharacters(in: .whitespacesAndNewlines), details: BrainPersonDetails(notes: cleanNotes))
+            }
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func closenessLabel(_ value: Int) -> String {
+        switch value { case 1: return "very close"; case 2: return "close"; case 3: return "in touch"; case 4: return "distant"; default: return "far" }
+    }
+}
+
+/// Chats started on a person's page belong to that person (like project chats) and stay out of the main Chats list.
+enum PersonChats {
+    private static var file: URL { InferoidPaths.support.appendingPathComponent("PersonChats.json") }
+    private static func key(_ name: String) -> String { name.lowercased().trimmingCharacters(in: .whitespaces) }
+
+    static func load() -> [String: [UUID]] {
+        guard let data = try? Data(contentsOf: file), let map = try? JSONDecoder().decode([String: [UUID]].self, from: data) else { return [:] }
+        return map
+    }
+
+    private static func save(_ map: [String: [UUID]]) {
+        try? FileManager.default.createDirectory(at: InferoidPaths.support, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(map) { try? data.write(to: file, options: .atomic) }
+    }
+
+    static func ids(for name: String) -> [UUID] { load()[key(name)] ?? [] }
+    /// The person a chat was started about, if any (stored lowercased; shown capitalized).
+    static func person(for id: UUID) -> String? { load().first { $0.value.contains(id) }.map { $0.key.capitalized } }
+    static var allIDs: Set<UUID> { Set(load().values.flatMap { $0 }) }
+
+    static func add(_ id: UUID, to name: String) {
+        var map = load(); map[key(name), default: []].append(id); save(map)
+    }
+
+    static func remove(_ id: UUID, from name: String) {
+        var map = load(); map[key(name)]?.removeAll { $0 == id }; save(map)
     }
 }

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-APP_ZIP = "InferoidNotes.zip"
+APP_ZIP = "Inferoid.zip"
 APP_VERSION = "0.6.0"
 # Default downloads: the app from this repo's GitHub release, the model from Hugging Face (pinned revision).
 APP_BASE = f"https://github.com/inferoid/inferoid/releases/download/notes-v{APP_VERSION}"
@@ -44,6 +44,7 @@ MODELS = [
     ("inferoid-notes-e2b", 8, 2.5, "lighter model for 8 GB Macs: twice as fast, but about twice the mistakes of the E4B"),
 ]
 MIN_RAM = MODELS[-1][1]
+INKLING_MIN_RAM = 24  # same as brain.MIN_RAM_GB (brain imports this module)
 
 
 def home() -> Path:
@@ -56,10 +57,17 @@ def pick(memory: dict[str, float]) -> tuple[str, int, float, str] | None:
     return next((m for m in MODELS if ram >= m[1] - 0.5), None)
 
 
+def inkling_tier(memory: dict[str, float]) -> bool:
+    """24 GB+ Macs run one model for everything: Inkling 2 Mini on g13 (INFEROID_NOTES_GEMMA=1 keeps Gemma)."""
+    return memory.get("ram_gb", 0.0) >= INKLING_MIN_RAM - 0.5 and not os.environ.get("INFEROID_NOTES_GEMMA")
+
+
 def fit_line(memory: dict[str, float]) -> str:
     """One line for the setup menu: what notes would install on this machine."""
     if platform.system() != "Darwin" and not os.environ.get("INFEROID_NOTES_ANY_OS"):
         return "Mac only for now"
+    if inkling_tier(memory):
+        return "inkling-2-mini (13.0 GB download): one model for notes and chat"
     m = pick(memory)
     if not m:
         return f"needs {MIN_RAM} GB of memory"
@@ -123,7 +131,7 @@ def _python() -> str:
 
 
 def _app_sum(fetcher: Callable[[str, str, Path], Path], dest: Path) -> dict[str, str]:
-    """The release publishes InferoidNotes.zip.sha256 next to the zip."""
+    """The release publishes Inferoid.zip.sha256 next to the zip."""
     text = fetcher(APP_BASE, APP_ZIP + ".sha256", dest).read_text().split()
     return {APP_ZIP: text[0]} if text else {}
 
@@ -181,6 +189,10 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         out(f"The Inferoid app needs at least {MIN_RAM} GB of memory; this machine has {memory.get('ram_gb', 0):.0f} GB.")
         return 1
     model, _, size, why = choice
+    inkling = runtime == "mlx" and inkling_tier(memory)
+    if inkling:
+        model, size, why = ("inkling-2-mini", 13.0, "one model for notes and chat; on 23 held-out calls its notes had fewer "
+                            "mistakes than our Gemma notes model (60 vs 67), and chat starts answering in about half a second")
     if runtime == "llama":
         model, size, why = "gemma-4-E4B-it-Q4_K_M", 5.0, "one Gemma 4 E4B GGUF base model with per-skill LoRA adapters"
     src = source(cfg)
@@ -191,7 +203,7 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
     try:
         if src:
             sums = _sums(src, downloads, fetcher)
-            names = (APP_ZIP,) if runtime == "llama" else (APP_ZIP, f"{model}.tar")
+            names = (APP_ZIP,) if runtime == "llama" or inkling else (APP_ZIP, f"{model}.tar")
         else:
             sums = _app_sum(fetcher, downloads)
             names = (APP_ZIP,)
@@ -207,14 +219,18 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         out(f"Download failed ({exc}). Check your connection and run: inferoid add notes")
         return 1
 
-    if runtime == "mlx" and src and not (model_dir / "config.json").exists():
+    if runtime == "mlx" and not inkling and src and not (model_dir / "config.json").exists():
         out("  Unpacking the model…")
         with tarfile.open(files[f"{model}.tar"]) as tar:
             tar.extractall(root, filter="data")
 
     venv = root / "venv"
     py = venv / "bin" / "python"
-    if runtime == "llama":
+    if inkling:
+        from . import brain
+        if not brain.install_model(out, fetcher, run):
+            return 1
+    elif runtime == "llama":
         out("  Installing llama-server and the Gemma 4 E4B base…")
         try:
             archive = _checked_fetch(LLAMA_RELEASE, LLAMA_ARCHIVE, downloads, LLAMA_ARCHIVE_SHA256, fetcher)
@@ -244,14 +260,14 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
             out(f"The model server environment was not created in {venv}.")
             return 1
 
-    if runtime == "mlx" and not (model_dir / "config.json").exists():
+    if runtime == "mlx" and not inkling and not (model_dir / "config.json").exists():
         repo, rev = HF_REPOS[model]
         out(f"  Downloading the model from Hugging Face ({repo})…")
         code = f"from huggingface_hub import snapshot_download; snapshot_download({repo!r}, revision={rev!r}, local_dir={str(model_dir)!r})"
         if run([str(py), "-c", code]) != 0:
             out(f"Downloading {repo} failed. Check your connection and run: inferoid add notes")
             return 1
-    if runtime == "mlx" and not (model_dir / "config.json").exists():
+    if runtime == "mlx" and not inkling and not (model_dir / "config.json").exists():
         out(f"  The model download did not contain {model}/config.json.")
         return 1
 
@@ -266,7 +282,9 @@ def install(memory: dict[str, float], out: Callable[[str], None] = print, cfg: d
         out("Unzipping the app failed.")
         return 1
 
-    if runtime == "llama":
+    if inkling:
+        installed_config = {"runtime": "inkling", "model": model, "app": str(apps / APP_NAME)}
+    elif runtime == "llama":
         installed_config = {"runtime": "llama", "server": str(server), "base": str(base), "port": PORT,
                             "adapters": [], "model": model, "app": str(apps / APP_NAME)}
     else:

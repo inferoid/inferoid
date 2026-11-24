@@ -5,13 +5,30 @@ import SwiftUI
 /// extension's tab.
 enum Pane: Hashable {
     case home, meetings, newChat, live
+    case library, travels, journal, routines
+    case content(BrainSourceKind, String)
+    case projects, reflection
     case brainOrbit, brainPromises, brainChanges
     case brainPerson(String), brainMatter(Int64), brainBriefing(String)
+    case project(UUID)
+    case projectChat(UUID, UUID)
+    case personChat(String, UUID)
     case chat(UUID)
     case chatDraft(UUID, String)
     case extensionTab(String)
     case meeting(String)
 }
+
+func sourcePane(sourceID: String, kind: BrainSourceKind) -> Pane {
+    switch kind {
+    case .meeting: return .meeting(sourceID)
+    case .library, .article, .movies, .journal, .trip: return .content(kind, sourceID)
+    case .project:
+        return SourceRegistry.projectID(from: sourceID).map(Pane.project) ?? .projects
+    }
+}
+
+func sourcePane(_ source: Meeting) -> Pane { sourcePane(sourceID: source.sourceID, kind: source.sourceKind) }
 
 @MainActor
 public struct MainView: View {
@@ -26,8 +43,11 @@ public struct MainView: View {
     private var brainSection: some View {
         Section("Brain") {
             Label("Orbit", systemImage: "circle.hexagongrid").tag(Pane.brainOrbit)
-            Label("Promises", systemImage: "checklist").tag(Pane.brainPromises)
-            Label("What changed", systemImage: "arrow.triangle.2.circlepath").tag(Pane.brainChanges)
+            Label("Library", systemImage: "books.vertical").tag(Pane.library)
+            Label("Travels", systemImage: "airplane").tag(Pane.travels)
+            Label("Journal", systemImage: "book.pages").tag(Pane.journal)
+            Label("Projects", systemImage: "folder").tag(Pane.projects)
+            Label("Routines", systemImage: "repeat").tag(Pane.routines)
         }
     }
 
@@ -37,6 +57,13 @@ public struct MainView: View {
             switch selected {
             case .home: HomeStatusView(pane: $pane)
             case .meetings: MeetingsView(pane: $pane)
+            case .library: LibraryView(pane: $pane)
+            case .travels: TravelsView(pane: $pane)
+            case .journal: JournalView(pane: $pane)
+            case .content(let kind, let id): contentView(kind: kind, id: id)
+            case .projects: ProjectsView(pane: $pane)
+            case .reflection: WeeklyReflectionView()
+            case .routines: RoutinesView()
             case .brainOrbit: BrainOrbitView(pane: $pane)
             case .brainPromises: BrainPromisesView(pane: $pane)
             case .brainChanges: BrainChangesView(pane: $pane)
@@ -44,20 +71,32 @@ public struct MainView: View {
             case .brainMatter(let id): BrainMatterView(pane: $pane, matterID: id)
             case .brainBriefing(let name): BrainBriefingView(pane: $pane, personName: name)
             case .newChat: ProgressView()
-            case .chat(let id): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }).id(id)
-            case .chatDraft(let id, let draft): ChatView(threadID: id, openMeeting: { pane = .meeting($0) }, initialDraft: draft).id(id)
+            case .chat(let id): ChatView(threadID: id, openSource: { open(sourceID: $0, kind: $1) }).id(id)
+            case .chatDraft(let id, let draft): ChatView(threadID: id, openSource: { open(sourceID: $0, kind: $1) }, initialDraft: draft).id(id)
+            case .project(let id): ProjectView(projectID: id, pane: $pane)
+            case .personChat(let name, let threadID):
+                ChatView(threadID: threadID, openSource: { open(sourceID: $0, kind: $1) }, person: name,
+                         personBack: { pane = .brainPerson(name) }).id(threadID)
+            case .projectChat(let projectID, let threadID):
+                if let project = ProjectStore.shared.project(projectID) {
+                    ChatView(threadID: threadID, openSource: { open(sourceID: $0, kind: $1) }, project: project,
+                             projectBack: { pane = .project(projectID) }, projectDeleted: { pane = .project(projectID) }).id(threadID)
+                } else {
+                    ProjectsView(pane: $pane)
+                }
             case .live: LiveMeetingView()
             case .extensionTab(let id):
                 if let view = InferoidExtensions.view(for: id) { view } else { Text("This tab is no longer available") }
             case .meeting(let id):
-                if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m) } else { MeetingsView(pane: $pane) }
+                if let projectID = SourceRegistry.projectIDFromEpisode(id) { ProjectView(projectID: projectID, pane: $pane) }
+                else if let m = rec.meetings.first(where: { $0.id == id }) { MeetingView(meeting: m, pane: $pane) }
+                else { MeetingsView(pane: $pane) }
             }
     }
 
     public var body: some View {
         NavigationSplitView {
             List(selection: $pane) {
-                Label("New chat", systemImage: "square.and.pencil").tag(Pane.newChat)
                 Label("Home", systemImage: "house").tag(Pane.home)
                 Label("Meetings", systemImage: "person.2.wave.2").tag(Pane.meetings)
                 brainSection
@@ -71,11 +110,21 @@ public struct MainView: View {
                             .tag(Pane.live)
                     }
                 }
-                let saved = chats.threads.filter { !$0.messages.isEmpty }
-                if !saved.isEmpty {
-                    Section("Chats") {
+                let projectChatIDs = Set(ProjectStore.shared.projects.flatMap(\.chatIDs)).union(PersonChats.allIDs)
+                let saved = chats.threads.filter { !$0.messages.isEmpty && !projectChatIDs.contains($0.id) && $0.id != AssistantIntro.threadID }
+                Section("Chats") {
+                    Label("New chat", systemImage: "square.and.pencil").tag(Pane.newChat)
+                    if chats.assistantThread != nil {
+                        AssistantSidebarRow(unread: pane == .chat(AssistantIntro.threadID) ? 0 : chats.unreadCount(AssistantIntro.threadID))
+                        .tag(Pane.chat(AssistantIntro.threadID))
+                        .contextMenu { Button("Start the introduction again") { chats.restartIntro() } }
+                    }
                         ForEach(saved) { thread in
-                            Text(thread.title).lineLimit(1).tag(Pane.chat(thread.id))
+                            SidebarChatRow(title: thread.title) {
+                                if pane == .chat(thread.id) { pane = .home }
+                                chats.delete(thread.id)
+                            }
+                            .tag(Pane.chat(thread.id))
                                 .contextMenu {
                                     Button("Rename") { renameText = thread.title; renaming = thread.id }
                                     Button("Delete", role: .destructive) {
@@ -84,7 +133,6 @@ public struct MainView: View {
                                     }
                                 }
                         }
-                    }
                 }
             }
             .listStyle(.sidebar)
@@ -104,8 +152,8 @@ public struct MainView: View {
                         .buttonStyle(.plain)
                     }
                     HStack(spacing: 6) {
-                        Image(systemName: rec.online ? "lock.fill" : "airplane")
-                        Text(rec.online ? "Everything runs on this Mac" : "Offline. Everything runs on this Mac")
+                        Image(systemName: rec.privateMode ? "eye.slash.fill" : (rec.online ? "lock.fill" : "airplane"))
+                        Text(rec.privateMode ? "Private mode is on" : (rec.online ? "Everything runs on this Mac" : "Offline. Everything runs on this Mac"))
                         Spacer()
                         SettingsLink { Image(systemName: "gearshape") }
                             .buttonStyle(.plain)
@@ -120,22 +168,17 @@ public struct MainView: View {
             detailView(for: pane ?? .home)
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    rec.toggle()
-                    pane = .live
-                } label: {
-                    Label(rec.isRecording ? "Stop" : "Start meeting", systemImage: rec.isRecording ? "stop.fill" : "mic.fill")
-                        .labelStyle(.titleAndIcon)
+            // Starting a meeting lives on Home and in the menu bar; the toolbar only offers Stop while recording.
+            if rec.isRecording {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { rec.toggle(); pane = .live } label: { Label("Stop meeting", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
+                        .buttonStyle(.borderedProminent).tint(.red)
+                        .keyboardShortcut(.return, modifiers: [.command, .shift])
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(rec.isRecording ? .red : .accentColor)
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(rec.isWriting)
             }
         }
         .frame(minWidth: 820, minHeight: 560)
-        .onAppear { rec.reloadMeetings() }
+        .onAppear { rec.reloadMeetings(); RoutineStore.shared.start() }
         .onChange(of: rec.isRecording) { _, on in if on { pane = .live } }
         .onChange(of: pane) { _, new in
             if new == .newChat { pane = .chat(chats.newThread()) }
@@ -150,6 +193,34 @@ public struct MainView: View {
     private var liveLabel: String {
         if rec.isRecording { return "Recording  \(clock(rec.elapsed))" }
         return rec.isWriting ? "Writing notes…" : "Last meeting"
+    }
+
+    @ViewBuilder private func contentView(kind: BrainSourceKind, id: String) -> some View {
+        switch kind {
+        case .library:
+            if let uuid = UUID(uuidString: id), let item = CollectionStore.item(id: uuid, kind: .library) { CollectionItemView(item: item, pane: $pane) }
+            else { LibraryView(pane: $pane) }
+        case .article:
+            if let uuid = UUID(uuidString: id), let item = CollectionStore.item(id: uuid, kind: .articles) { CollectionItemView(item: item, pane: $pane) }
+            else { LibraryView(pane: $pane) }
+        case .movies:
+            if let uuid = UUID(uuidString: id), let item = CollectionStore.item(id: uuid, kind: .movies) { CollectionItemView(item: item, pane: $pane) }
+            else { LibraryView(pane: $pane) }
+        case .trip:
+            if let uuid = UUID(uuidString: id), let trip = TravelStore.trip(id: uuid) { TripView(trip: trip, pane: $pane) }
+            else { TravelsView(pane: $pane) }
+        case .journal:
+            if let uuid = UUID(uuidString: id), let entry = JournalStore.entry(id: uuid) { JournalView(pane: $pane, initialDay: entry.date) }
+            else { JournalView(pane: $pane) }
+        case .meeting: MeetingsView(pane: $pane)
+        case .project:
+            if let projectID = SourceRegistry.projectID(from: id) { ProjectView(projectID: projectID, pane: $pane) }
+            else { ProjectsView(pane: $pane) }
+        }
+    }
+
+    private func open(sourceID: String, kind: BrainSourceKind) {
+        pane = sourcePane(sourceID: sourceID, kind: kind)
     }
 }
 
@@ -166,7 +237,12 @@ struct HomeStatusView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Home").font(.largeTitle.bold())
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Home").font(.largeTitle.bold())
+                    Spacer()
+                    ModelStatusPill()
+                }
+                GetStartedCard(pane: $pane)
                 if let status = InferoidExtensions.homeStatus { status }
                 card {
                     HStack(alignment: .top) {
@@ -276,6 +352,7 @@ struct RecoveryBanner: View {
 struct MeetingsView: View {
     @EnvironmentObject var rec: Recorder
     @Binding var pane: Pane?
+    @State private var deleteTarget: Meeting?
 
     var body: some View {
         ScrollView {
@@ -320,8 +397,12 @@ struct MeetingsView: View {
                         Text(dayLabel(group.day)).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                         VStack(spacing: 0) {
                             ForEach(group.items) { m in
-                                Button { pane = .meeting(m.id) } label: { MeetingRow(meeting: m) }
+                                Button { pane = .meeting(m.id) } label: { MeetingRow(meeting: m, onDelete: rec.canDeleteMeeting(m) ? { deleteTarget = m } : nil) }
                                     .buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button("Delete meeting", role: .destructive) { deleteTarget = m }
+                                            .disabled(!rec.canDeleteMeeting(m))
+                                    }
                                 if m.id != group.items.last?.id { Divider().padding(.leading, 52) }
                             }
                         }
@@ -336,6 +417,19 @@ struct MeetingsView: View {
         }
         .onAppear { rec.refreshRecoveries() }
         .navigationTitle("Meetings")
+        .confirmationDialog("Delete this meeting? Its recording, transcript and notes move to the Trash, and anything the Brain learned from it is forgotten.",
+                            isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
+            Button("Delete meeting", role: .destructive) {
+                if let target = deleteTarget {
+                    do {
+                        try rec.deleteMeeting(target)
+                        if pane == .meeting(target.id) { pane = .meetings }
+                    } catch { rec.error = "Delete meeting: \(error.localizedDescription)" }
+                }
+                deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+        }
     }
 
     private var groups: [(day: String, items: [Meeting])] {
@@ -349,6 +443,8 @@ struct MeetingsView: View {
 
 struct MeetingRow: View {
     let meeting: Meeting
+    var onDelete: (() -> Void)? = nil
+    @State private var hovering = false
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "doc.text")
@@ -361,10 +457,19 @@ struct MeetingRow: View {
             }
             Spacer()
             Text(timeLabel(meeting)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            Image(systemName: meeting.includeInBrain ? "checkmark.square.fill" : "square")
+                .font(.caption).foregroundStyle(meeting.includeInBrain ? Color.accentColor : Color.secondary)
+                .help(meeting.includeInBrain ? "Included in Brain" : "Excluded from Brain")
+            if let onDelete {
+                Button(action: onDelete) { Image(systemName: "trash") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help("Delete meeting")
+                    .opacity(hovering ? 1 : 0)
+            }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 
@@ -575,10 +680,19 @@ struct NotesView: View {
 struct MeetingView: View {
     @EnvironmentObject var rec: Recorder
     let meeting: Meeting
+    @Binding var pane: Pane?
     @State private var tab = 0
     @State private var transcriptText = ""
     @State private var renameSpeaker = ""
     @State private var isRenaming = false
+    @State private var includeInBrain: Bool
+    @State private var confirmingDelete = false
+
+    init(meeting: Meeting, pane: Binding<Pane?>) {
+        self.meeting = meeting
+        self._pane = pane
+        self._includeInBrain = State(initialValue: meeting.includeInBrain)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -587,6 +701,17 @@ struct MeetingView: View {
                 Text(dayLabel(meeting.date) + "  ·  " + timeLabel(meeting)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 28).padding(.top, 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle("Include in Brain", isOn: Binding(get: { includeInBrain }, set: { value in
+                    if rec.setIncludeInBrain(value, for: meeting) { includeInBrain = value }
+                }))
+                .toggleStyle(.checkbox)
+                if !includeInBrain {
+                    Text("The Brain and chat won't use this meeting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 28).padding(.top, 12)
             HStack {
                 Picker("", selection: $tab) {
                     Text("Notes").tag(0)
@@ -599,6 +724,8 @@ struct MeetingView: View {
                     NSPasteboard.general.setString(tab == 0 ? meeting.notes : transcriptText, forType: .string)
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([meeting.folder]) }
+                Button("Delete meeting", role: .destructive) { confirmingDelete = true }
+                    .disabled(!rec.canDeleteMeeting(meeting))
             }
             .padding(.horizontal, 28).padding(.vertical, 12)
             Divider()
@@ -647,6 +774,15 @@ struct MeetingView: View {
         .navigationTitle(meeting.title)
         .id(meeting.id)
         .onAppear { transcriptText = meeting.transcript }
+        .confirmationDialog("Delete this meeting? Its recording, transcript and notes move to the Trash, and anything the Brain learned from it is forgotten.", isPresented: $confirmingDelete) {
+            Button("Delete meeting", role: .destructive) {
+                do {
+                    try rec.deleteMeeting(meeting)
+                    pane = .meetings
+                } catch { rec.error = "Delete meeting: \(error.localizedDescription)" }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 
@@ -733,4 +869,185 @@ func timeLabel(_ m: Meeting) -> String {
 func summaryLine(_ m: Meeting) -> String {
     m.notes.split(separator: "\n").first { !$0.hasPrefix("#") && !$0.hasPrefix("-") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         .map(String.init) ?? "Transcript only"
+}
+
+/// A sidebar chat row with a delete button that appears on hover.
+private struct SidebarChatRow: View {
+    let title: String
+    let delete: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(title).lineLimit(1)
+            Spacer(minLength: 0)
+            if hovering {
+                Button(action: delete) { Image(systemName: "trash").font(.caption) }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help("Delete chat")
+            }
+        }
+        .onHover { hovering = $0 }
+    }
+}
+
+/// The assistant's row: emoji, name and unread badge; on hover, edit (name and emoji) and start fresh.
+private struct AssistantSidebarRow: View {
+    @ObservedObject private var chats = ChatStore.shared
+    let unread: Int
+    @State private var hovering = false
+    @State private var editing = false
+    @State private var confirmFresh = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(chats.profile.isOnboarded ? chats.profile.displayEmoji : "✨")
+            Text(chats.profile.isOnboarded ? chats.profile.displayName : "Assistant").fontWeight(.medium).lineLimit(1)
+            Spacer(minLength: 0)
+            if hovering && chats.profile.isOnboarded {
+                Button { editing = true } label: { Image(systemName: "pencil") }.buttonStyle(.borderless).help("Change name and emoji")
+                Button { confirmFresh = true } label: { Image(systemName: "arrow.counterclockwise") }.buttonStyle(.borderless)
+                    .help("Start a fresh conversation (keeps what it knows about you)")
+            } else if unread > 0 {
+                Text("\(unread)").font(.caption2.weight(.bold)).foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 1).background(Capsule().fill(Color.red))
+            }
+        }
+        .foregroundStyle(.primary)
+        .onHover { hovering = $0 }
+        .sheet(isPresented: $editing) { AssistantIdentitySheet() }
+        .confirmationDialog("Start a fresh conversation with \(chats.profile.displayName)?", isPresented: $confirmFresh, titleVisibility: .visible) {
+            Button("Start fresh") { chats.startFreshAssistantChat() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The messages are cleared. Your profile and everything in your Brain stay.") }
+    }
+}
+
+private struct AssistantIdentitySheet: View {
+    @ObservedObject private var chats = ChatStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ChatStore.shared.profile.displayName
+    @State private var emoji = ChatStore.shared.profile.displayEmoji
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Your assistant").font(.title2.bold())
+            Form {
+                TextField("Name", text: $name)
+                TextField("Emoji", text: $emoji)
+                HStack(spacing: 8) {
+                    ForEach(AssistantIntro.emojis, id: \.self) { option in
+                        Button(option) { emoji = option }.buttonStyle(.bordered).font(.title3)
+                    }
+                }
+            }.formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") { chats.updateIdentity(name: name, emoji: emoji); dismiss() }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24).frame(width: 460)
+    }
+}
+
+/// Home's setup list: what to connect or add so the Brain has something to work with. Done items are ticked.
+private struct GetStartedCard: View {
+    @EnvironmentObject var rec: Recorder
+    @ObservedObject private var chats = ChatStore.shared
+    @Binding var pane: Pane?
+    @State private var calendarConnected = MeetingCalendar.isConnected
+    @State private var hasLibrary = !CollectionStore.brainItems().isEmpty
+    @State private var hasPeople = ((try? BrainStore().orbitPeople(limit: 1)) ?? []).isEmpty == false
+    @AppStorage("home.getStarted.hidden") private var hidden = false
+
+    private struct Step: Identifiable {
+        let id: String; let title: String; let detail: String; let done: Bool; let action: String?; let run: (() -> Void)?
+    }
+
+    private var steps: [Step] {
+        [
+            Step(id: "calendar", title: "Connect your calendar", detail: "Names the people in your meetings and prepares a brief before each one.",
+                 done: calendarConnected, action: "Connect", run: { Task { calendarConnected = await MeetingCalendar.connect() } }),
+            Step(id: "assistant", title: "Meet your assistant", detail: "A one-minute intro so it knows what to call you.",
+                 done: chats.profile.isOnboarded, action: "Open", run: { pane = .chat(AssistantIntro.threadID) }),
+            Step(id: "meeting", title: "Record your first meeting", detail: "Notes are written on this Mac when you stop.",
+                 done: rec.meetings.contains { $0.sourceKind == .meeting }, action: nil, run: nil),
+            Step(id: "people", title: "Add the people who matter", detail: "Family, friends and colleagues, by how close they are.",
+                 done: hasPeople, action: "Orbit", run: { pane = .brainOrbit }),
+            Step(id: "library", title: "Add a book, article or video", detail: "Paste a link; the Brain learns what you read and watch.",
+                 done: hasLibrary, action: "Library", run: { pane = .library }),
+            Step(id: "email", title: "Connect email", detail: "Coming soon.", done: false, action: nil, run: nil),
+        ]
+    }
+
+    var body: some View {
+        let list = steps
+        let remaining = list.filter { !$0.done && $0.id != "email" }.count
+        if !hidden || remaining > 0 {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Get started").font(.headline)
+                    Text("\(list.filter(\.done).count) of \(list.count - 1) done").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if remaining == 0 { Button("Hide") { hidden = true }.buttonStyle(.borderless) }
+                }
+                ForEach(list) { step in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: step.done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(step.done ? Color.green : Color.secondary).font(.title3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.title).fontWeight(.medium).strikethrough(step.done, color: .secondary)
+                                .foregroundStyle(step.id == "email" ? .secondary : .primary)
+                            Text(step.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !step.done, let action = step.action, let run = step.run {
+                            Button(action, action: run).buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.15)))
+            .onAppear {
+                calendarConnected = MeetingCalendar.isConnected
+                hasLibrary = !CollectionStore.brainItems().isEmpty
+                hasPeople = ((try? BrainStore().orbitPeople(limit: 1)) ?? []).isEmpty == false
+            }
+        }
+    }
+}
+
+/// Green when the local model answered its last request, red (with Restart) when it failed.
+private struct ModelStatusPill: View {
+    @EnvironmentObject var rec: Recorder
+    @ObservedObject private var health = ModelHealth.shared
+
+    var body: some View {
+        let failed = health.lastError != nil
+        HStack(spacing: 8) {
+            Circle().fill(health.restarting ? Color.orange : (failed ? Color.red : Color.green)).frame(width: 10, height: 10)
+            Text(health.restarting ? "Restarting the model…" : (failed ? "Model stopped working" : "Model ready"))
+                .font(.callout.weight(.medium))
+            if failed && !health.restarting {
+                Button("Restart") { restart() }.buttonStyle(.bordered).controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Capsule().fill((failed ? Color.red : Color.green).opacity(0.12)))
+        .help(health.lastError ?? (health.lastOK.map { "Last answered \($0.formatted(date: .omitted, time: .shortened))" } ?? "Runs on this Mac"))
+    }
+
+    private func restart() {
+        health.restarting = true
+        Task {
+            do { try await ModelManager.shared.restart(rec.model); health.report(nil) }
+            catch { health.report(error.localizedDescription) }
+            health.restarting = false
+        }
+    }
 }
