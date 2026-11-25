@@ -1,0 +1,8 @@
+{
+  "model_path": "C:/Models/inkling.gguf",
+  "whisper_model_path": "C:/Models/ggml-base.en.bin",
+  "style": "inkling",
+  "llama_server_path": "llama-server.exe",
+  "whisper_path": "whisper-cli.exe",
+  "server_args": ["--ctx-size", "24576", "--parallel", "1", "--no-mmap"]
+}

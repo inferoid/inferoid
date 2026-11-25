@@ -1,0 +1,37 @@
+[package]
+name = "inferoid-desktop"
+version = "0.1.0"
+description = "Private, local-first meeting notes and memory"
+authors = ["Inferoid"]
+edition = "2021"
+
+[lib]
+name = "inferoid_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+trash = "5"
+hound = "3.5"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["clock"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+regex = "1"
+scraper = "0.21"
+urlencoding = "2"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

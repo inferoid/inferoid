@@ -1,0 +1,8 @@
+import { ArrowLeft, Check, Trash2 } from "lucide-react";
+import { useState } from "react";
+import type { Meeting } from "../types";
+
+export function MeetingView({ meeting, onBack, onInclude, onDelete }: { meeting: Meeting; onBack: () => void; onInclude: (value: boolean) => void; onDelete: () => void }) {
+  const [tab, setTab] = useState<"notes" | "transcript">("notes");
+  return <article className="meeting-view"><button className="back-button" onClick={onBack}><ArrowLeft size={16} /> All meetings</button><div className="view-header"><div><div className="eyebrow">{meeting.date}</div><h1>{meeting.title}</h1><p className="muted">{new Date(meeting.started).toLocaleString()}</p></div><button className="danger-button" onClick={() => { if (confirm("Delete this meeting? Its recording, transcript and notes move to the Trash, and anything the Brain learned from it is forgotten.")) onDelete(); }}><Trash2 size={16} /> Delete meeting</button></div><label className="include-toggle"><input type="checkbox" checked={meeting.includeInBrain} onChange={(e) => onInclude(e.target.checked)} /><span className="check"><Check size={13} /></span><span><strong>Include in Brain</strong><small>{meeting.includeInBrain ? "Used by Brain and Chat" : "The Brain and chat won't use this meeting."}</small></span></label><div className="tabs"><button className={tab === "notes" ? "tab active" : "tab"} onClick={() => setTab("notes")}>Notes</button><button className={tab === "transcript" ? "tab active" : "tab"} onClick={() => setTab("transcript")}>Transcript</button></div><div className="document"><pre>{tab === "notes" ? meeting.notes || "No notes for this meeting; the transcript is saved." : meeting.transcript || "No transcript."}</pre></div></article>;
+}

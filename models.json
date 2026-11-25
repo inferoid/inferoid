@@ -1,9 +1,13 @@
 {
-  "_comment": "What the Mac app's 'Update model' compares against. Bump a revision when a new or fine-tuned pack ships, in the same release as the matching PACK_REVISION in src/inferoid/brain.py.",
+  "_comment": "What the apps' 'Update model' compares against. Mac: bump inkling-2-mini-g13 with PACK_REVISION in src/inferoid/brain.py. Windows: bump inkling-2-mini-gguf-q2kxl with MODEL_REVISION and the pinned sizes/checksums in apps/desktop/src-tauri/src/setup.rs, in the same release.",
   "models": {
     "inkling-2-mini-g13": {
       "name": "Inkling 2 Mini",
       "revision": "7a7c673e159f18a6313ab9099e15f85b8e607193"
+    },
+    "inkling-2-mini-gguf-q2kxl": {
+      "name": "Inkling 2 Mini",
+      "revision": "8078d149286eec7193795413b9e0643da6d11fa1"
     }
   }
 }

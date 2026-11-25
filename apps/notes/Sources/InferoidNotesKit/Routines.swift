@@ -330,6 +330,24 @@ public final class RoutineStore: ObservableObject {
 }
 
 private enum RoutineEngine {
+    /// People in Orbit with closeness and last contact, newest first as Orbit lists them.
+    static func peopleSection(now: Date = Date()) -> String {
+        guard let people = try? BrainStore().orbitPeople(limit: 40, now: now), !people.isEmpty else { return "" }
+        let iso = ISO8601DateFormatter()
+        let lines = people.map { person -> String in
+            let level = person.closenessLevel ?? person.suggestedClosenessLevel
+            var line = "- \(person.entity.name) (\(person.entity.world.rawValue), closeness \(level) of 5"
+            if let last = person.lastMet.flatMap({ iso.date(from: $0) }) {
+                line += ", last met \(max(0, Int(now.timeIntervalSince(last) / 86_400))) days ago"
+            } else {
+                line += ", no meetings recorded"
+            }
+            if person.hasOpenPromise { line += ", open promise" }
+            return line + ")"
+        }
+        return "People in Orbit (closeness 1 = very close, 5 = far):\n" + lines.joined(separator: "\n") + "\n"
+    }
+
     static func run(routine: Routine, meetings: [Meeting], projects: [Project], model: String) async throws -> String {
         let all = SourceRegistry.documents(meetings: meetings, projects: projects)
         let sources: [BrainSourceDocument]
@@ -340,7 +358,11 @@ private enum RoutineEngine {
         }
         let hits = Brain.searchSources(routine.prompt, in: sources, limit: 8)
         let context = Brain.context(for: routine.prompt, sourceHits: hits, sources: sources, budget: 16_000)
-        let user = context.isEmpty ? routine.prompt : "Local records:\n\n\(context)\nTask: \(routine.prompt)"
+        // Routines like "Keep in touch" are about people: give them Orbit (closeness and last contact), not just documents.
+        let people: String
+        if case .wholeBrain = routine.scope { people = peopleSection() } else { people = "" }
+        let records = [people, context].filter { !$0.isEmpty }.joined(separator: "\n")
+        let user = records.isEmpty ? routine.prompt : "Local records:\n\n\(records)\nTask: \(routine.prompt)"
         return try await Summarizer.complete(system: "You are a private local routine assistant. Use only the supplied local records, be concise and factual, and say when the records do not answer the task. Nothing leaves this Mac.", user: user, model: model, maxTokens: 600)
     }
 }
