@@ -1,0 +1,9 @@
+{
+  "_comment": "What the Mac app's 'Update model' compares against. Bump a revision when a new or fine-tuned pack ships, in the same release as the matching PACK_REVISION in src/inferoid/brain.py.",
+  "models": {
+    "inkling-2-mini-g13": {
+      "name": "Inkling 2 Mini",
+      "revision": "7a7c673e159f18a6313ab9099e15f85b8e607193"
+    }
+  }
+}

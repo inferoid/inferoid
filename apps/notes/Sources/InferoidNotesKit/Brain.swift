@@ -94,7 +94,11 @@ public struct SourceRegistry: BrainSourceRegistry, Sendable {
             return BrainSourceDocument(id: item.id.uuidString, kind: kind, title: item.title.isEmpty ? "Untitled" : item.title,
                                        date: ISO8601DateFormatter().string(from: date), chunks: Brain.chunks(text), includeInBrain: item.includeInBrain)
         }
-        let journalDocs = JournalStore.load().map { entry in
+        // One page per day (older rewrites left several copies of a day) and no routine output: generated briefs fed back
+        // into the Brain crowd out the user's own records.
+        let journal = JournalStore.load()
+        let pages = journal.filter { $0.kind != .routine && ($0.kind != .daily || JournalStore.day($0.date, in: journal).id == $0.id) }
+        let journalDocs = pages.map { entry in
             BrainSourceDocument(id: entry.id.uuidString, kind: .journal,
                                 title: entry.sourceTitle,
                                 date: ISO8601DateFormatter().string(from: entry.date),
@@ -339,12 +343,13 @@ public enum Brain {
         var out = ""
         for hit in sourceHits {
             guard let source = sources.first(where: { $0.sourceID == hit.sourceID }) else { continue }
-            var block = "### \(source.sourceTitle) (\(source.sourceDate))\n"
+            let heading = "### \(source.sourceKind.label): \(source.sourceTitle), \(source.sourceDate.prefix(10))\n"
+            var block = heading
             for chunk in source.textChunks {
                 let lines = chunk.split(separator: "\n").filter { line in terms.contains { line.lowercased().contains($0) } }.prefix(12)
                 if !lines.isEmpty { block += lines.map { chatSpeakerText(String($0)) }.joined(separator: "\n") + "\n" }
             }
-            if block == "### \(source.sourceTitle) (\(source.sourceDate))\n" { block += source.textChunks.first ?? "" }
+            if block == heading { block += source.textChunks.first ?? "" }
             if out.count + block.count > budget { break }
             out += block + "\n"
         }

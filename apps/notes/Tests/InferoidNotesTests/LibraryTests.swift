@@ -204,7 +204,9 @@ final class LibraryTests: XCTestCase {
 
 private extension JSONDecoder {
     static var iso8601: JSONDecoder { let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; return decoder }
+}
 
+extension LibraryTests {
     func testIMDbAndIdTitlesAreCleaned() {
         let url = URL(string: "https://www.imdb.com/title/tt0099685/")!
         XCTAssertTrue(CollectionLinkParser.looksLikeID("Tt0099685", url: url))

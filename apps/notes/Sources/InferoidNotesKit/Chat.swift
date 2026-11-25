@@ -61,7 +61,7 @@ public final class ChatStore: ObservableObject {
 
     /// Brain chat replies are short chat messages: the first word in under a second, the whole answer in a few seconds.
     static let replyTokens = 500
-    static let shortReply = "\n\nReply like a chat message: answer first, at most 120 words, cite the meetings you use."
+    static let shortReply = "\n\nReply like a chat message: answer first, at most 120 words, cite the sources you use like [Media: Title] or [Meeting: Title, 2026-11-14]."
     /// Records per turn. On the 12 Brain questions (11-23), cutting the records to 6,000 characters lost the key facts
     /// for every model; with full records Inkling scored 67.5 vs E4B 46.0. So the budget stays; reading the records
     /// while the user types hides the time.
@@ -430,6 +430,9 @@ public final class ChatStore: ObservableObject {
         number from their records, and the excerpts do not contain it, say it is not in their records instead of guessing.
         When they ask for advice, ideas, recommendations or an opinion, answer directly from what you know about them and the
         world. Never add notes like "this is a recommendation, not a record lookup".
+        When they ask what to watch, read, listen to, buy, try or do next, treat their saved items and notes as signals of
+        their taste and suggest new picks that fit it, naming why. Only point back to something they already saved when they
+        ask to revisit it.
         A fact marked "replaced" is an earlier version: answer with the newer one.
         In transcript excerpts, "you (the user)" is the person on this Mac and "the other person" is the call participant.
         """
@@ -964,7 +967,7 @@ struct MessageRow: View {
     /// The links under the answer already name its sources, so "[Web: …]", "[Meeting: …]" and "Source:" lines are
     /// removed from the text shown (the saved text keeps them, so the model still sees its citations).
     static func withoutCitations(_ text: String) -> String {
-        var out = text.replacingOccurrences(of: #"\s*\[(Web|Meeting|Library|Book|Article|Media|Trip|Journal|Project|Source)[^\]]*\](,?\s*(and\s*)?)?"#,
+        var out = text.replacingOccurrences(of: #"\s*\[(Web|Meeting|Library|Book|Article|Media|Trip|Journal|Project|Source|Personal details)[^\]]*\](,?\s*(and\s*)?)?"#,
                                             with: " ", options: .regularExpression)
         out = out.replacingOccurrences(of: #"(?m)^\s*(Sources?|Pages used)\s*:\s*$"#, with: "", options: .regularExpression)
         out = out.replacingOccurrences(of: #"[ \t]+([.,;:])"#, with: "$1", options: .regularExpression)

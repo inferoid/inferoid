@@ -119,11 +119,16 @@ def install_model(out: Callable[[str], None], fetcher: Callable[[str, str, Path]
     out(f"  Downloading Inkling 2 Mini from Hugging Face ({PACK_REPO}, pinned, {PACK_GB:.0f} GB)…")
     try:
         for name, digest in PACK_FILES.items():
+            # A file from an older model version is replaced (fetch skips files that already exist).
+            old = model_dir / name
+            if old.exists() and notes._sha256(old) != digest:
+                old.unlink()
             notes._checked_fetch(PACK_URL, name, model_dir, digest, fetcher)
     except (OSError, ValueError) as exc:
         out(f"Download failed ({exc}). Check your connection and run the install again.")
         return False
-    config_path().write_text(json.dumps({"runtime": "g13", "g13": str(g13), "model_dir": str(model_dir), "port": PORT}, indent=2) + "\n")
+    config_path().write_text(json.dumps({"runtime": "g13", "g13": str(g13), "model_dir": str(model_dir), "port": PORT,
+                                         "revision": PACK_REVISION}, indent=2) + "\n")
     return True
 
 

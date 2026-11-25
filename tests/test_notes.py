@@ -281,6 +281,14 @@ def test_brain_install_writes_config_for_the_app(tmp_path, monkeypatch):
     assert cfg["g13"].endswith("g13-venv/bin/g13")
     assert all((brain.root() / "inkling-g13-q3-bf16" / n).exists() for n in sums)
     assert any("g13 @ git+https://gitlab.com/karulab/g13-engine.git@c91c0180" in " ".join(c) for c in cmds)
+    assert cfg["revision"] == brain.PACK_REVISION
+
+    # A newer model version: files whose checksum changed are downloaded again, unchanged ones stay.
+    stale = brain.root() / "inkling-g13-q3-bf16" / next(iter(sums))
+    stale.write_text("old model bytes")
+    rc = brain.install({"ram_gb": 24}, lines.append, fetcher=lambda _src, name, dest: notes.fetch(str(src), name, dest), run=run)
+    assert rc == 0, lines
+    assert notes._sha256(stale) == sums[stale.name]
 
 
 def test_brain_install_refuses_small_macs_and_bad_downloads(tmp_path, monkeypatch):

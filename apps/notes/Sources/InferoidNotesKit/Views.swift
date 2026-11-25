@@ -233,6 +233,8 @@ struct HomeStatusView: View {
     @State private var testing = false
     @State private var testResult: String?
     @State private var testOK = false
+    @ObservedObject private var appUpdater = AppUpdater.shared
+    @ObservedObject private var modelUpdater = ModelUpdater.shared
 
     var body: some View {
         ScrollView {
@@ -258,7 +260,21 @@ struct HomeStatusView: View {
                             }
                         }
                         Spacer()
-                        Button(testing ? "Testing…" : "Test model") { test() }.disabled(testing || rec.isWriting)
+                        VStack(alignment: .trailing, spacing: 8) {
+                            Button(testing ? "Testing…" : "Test model") { test() }.disabled(testing || rec.isWriting)
+                            modelUpdateControl
+                        }
+                    }
+                }
+                card {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Inferoid").font(.headline)
+                            Text("Version \(appUpdater.currentVersion)").foregroundStyle(.secondary)
+                            appUpdateLine
+                        }
+                        Spacer()
+                        appUpdateButton
                     }
                 }
                 card {
@@ -284,9 +300,75 @@ struct HomeStatusView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle("Home")
+        .task {
+            if appUpdater.state == .idle { await appUpdater.check() }
+            if modelUpdater.state == .idle { await modelUpdater.check() }
+        }
     }
 
     private var savedChats: Int { chats.threads.filter { !$0.messages.isEmpty }.count }
+
+    /// Model update: shown under Test model. A new or fine-tuned pack in models.json shows "Update model".
+    @ViewBuilder private var modelUpdateControl: some View {
+        switch modelUpdater.state {
+        case .available(let name):
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("Update available: \(name)").font(.caption).foregroundStyle(.orange)
+                Button("Update model") { Task { await modelUpdater.update(model: rec.model) } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(rec.isWriting || rec.isRecording)
+            }
+        case .updating:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Updating the model…").font(.caption).foregroundStyle(.secondary)
+            }
+        case .done:
+            Label("Model updated", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+        case .failed(let message):
+            Text(message).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.trailing)
+                .frame(maxWidth: 260, alignment: .trailing)
+        case .upToDate:
+            Text("Model up to date").font(.caption).foregroundStyle(.secondary)
+        case .idle, .checking, .notInstalled:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var appUpdateLine: some View {
+        switch appUpdater.state {
+        case .available(let version):
+            Text("Update available: version \(version)").font(.callout).foregroundStyle(.orange)
+        case .upToDate:
+            Text("You're up to date.").font(.callout).foregroundStyle(.secondary)
+        case .development:
+            Text("Development build: update it from git.").font(.callout).foregroundStyle(.secondary)
+        case .checking:
+            Text("Checking for updates…").font(.callout).foregroundStyle(.secondary)
+        case .installing(let message):
+            Text(message).font(.callout).foregroundStyle(.secondary)
+        case .failed(let message):
+            Text(message).font(.callout).foregroundStyle(.orange)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var appUpdateButton: some View {
+        switch appUpdater.state {
+        case .available:
+            Button("Update") { Task { await appUpdater.install() } }
+                .buttonStyle(.borderedProminent)
+                .disabled(rec.isRecording || rec.isWriting)
+        case .installing:
+            ProgressView().controlSize(.small)
+        case .development:
+            EmptyView()
+        default:
+            Button("Check for updates") { Task { await appUpdater.check() } }
+                .disabled(appUpdater.state == .checking)
+        }
+    }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
