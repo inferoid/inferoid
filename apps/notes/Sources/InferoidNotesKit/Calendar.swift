@@ -4,6 +4,7 @@ import Foundation
 
 struct MeetingCalendarContext {
     let attendeeNames: [String]
+    var attendeeEmails: [String] = []
 
     var otherParticipant: String? {
         attendeeNames.count == 1 ? attendeeNames[0] : nil
@@ -64,7 +65,7 @@ enum MeetingCalendar {
             .sorted { $0.endDate.timeIntervalSince($0.startDate) < $1.endDate.timeIntervalSince($1.startDate) }
         guard let event = events.first else { return MeetingCalendarContext(attendeeNames: []) }
 
-        return MeetingCalendarContext(attendeeNames: names(for: event))
+        return MeetingCalendarContext(attendeeNames: names(for: event), attendeeEmails: values(for: event).compactMap { $0.email })
     }
 
     private static func names(for event: EKEvent) -> [String] {

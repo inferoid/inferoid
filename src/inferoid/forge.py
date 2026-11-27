@@ -10,7 +10,7 @@ from typing import Any
 
 from . import __version__, claude
 
-DEFAULT_URL = "https://app.inferoid.com/forge"
+DEFAULT_URL = "https://console.inferoid.com/forge"
 
 
 def config_path() -> Path:

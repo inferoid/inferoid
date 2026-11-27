@@ -769,11 +769,19 @@ struct MeetingView: View {
     @State private var isRenaming = false
     @State private var includeInBrain: Bool
     @State private var confirmingDelete = false
+    @State private var actionResult: String?
 
     init(meeting: Meeting, pane: Binding<Pane?>) {
         self.meeting = meeting
         self._pane = pane
         self._includeInBrain = State(initialValue: meeting.includeInBrain)
+    }
+
+    private func runAction(_ action: MeetingAction) {
+        guard let info = SavedMeetingInfo(folder: meeting.folder) else { actionResult = "This meeting has no notes yet."; return }
+        Task { @MainActor in
+            do { actionResult = try await action.handler(info) } catch { actionResult = error.localizedDescription }
+        }
     }
 
     var body: some View {
@@ -804,6 +812,14 @@ struct MeetingView: View {
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(tab == 0 ? meeting.notes : transcriptText, forType: .string)
+                }
+                if !InferoidExtensions.meetingActions.isEmpty {
+                    Menu("Send to") {
+                        ForEach(InferoidExtensions.meetingActions) { action in
+                            Button { runAction(action) } label: { Label(action.title, systemImage: action.systemImage) }
+                        }
+                    }
+                    .fixedSize()
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([meeting.folder]) }
                 Button("Delete meeting", role: .destructive) { confirmingDelete = true }
@@ -856,6 +872,9 @@ struct MeetingView: View {
         .navigationTitle(meeting.title)
         .id(meeting.id)
         .onAppear { transcriptText = meeting.transcript }
+        .alert(actionResult ?? "", isPresented: Binding(get: { actionResult != nil }, set: { if !$0 { actionResult = nil } })) {
+            Button("OK") { actionResult = nil }
+        }
         .confirmationDialog("Delete this meeting? Its recording, transcript and notes move to the Trash, and anything the Brain learned from it is forgotten.", isPresented: $confirmingDelete) {
             Button("Delete meeting", role: .destructive) {
                 do {

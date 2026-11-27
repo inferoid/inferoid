@@ -107,7 +107,7 @@ struct Feedback: Codable {
 
 enum FeedbackSender {
     static var endpoint: URL {
-        URL(string: UserDefaults.standard.string(forKey: "feedbackURL") ?? "https://app.inferoid.com/forge/api/v1/feedback")!
+        URL(string: UserDefaults.standard.string(forKey: "feedbackURL") ?? "https://console.inferoid.com/forge/api/v1/feedback")!
     }
     static var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
 

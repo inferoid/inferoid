@@ -16,6 +16,7 @@ public final class Recorder: ObservableObject {
     @Published var notes: Notes?
     @Published var notesInfo = ""
     @Published private(set) var attendeeNames: [String] = []
+    private var attendeeEmails: [String] = []
     @Published var elapsed: TimeInterval = 0
     @Published var levelMe: Float = 0
     @Published var levelThem: Float = 0
@@ -111,6 +112,7 @@ public final class Recorder: ObservableObject {
 
     func start() async {
         guard !isRecording, !isWriting else { return }
+        if let lock = InferoidExtensions.lock { error = lock.message; status = lock.message; return }
         error = nil
         await prepare()
         guard await transcriber.isReady else { return }
@@ -119,6 +121,7 @@ public final class Recorder: ObservableObject {
         privateModeAtStart = PrivateMode.isEnabled
         let calendarContext = await MeetingCalendar.currentContext(at: started)
         attendeeNames = calendarContext.attendeeNames
+        attendeeEmails = calendarContext.attendeeEmails
 
         let me = Segmenter { [weak self] samples, start, end in self?.utterance("Me", samples, start, end) }
         let otherSpeaker = calendarContext.otherParticipant ?? "Them"
@@ -427,6 +430,7 @@ public final class Recorder: ObservableObject {
                                    "duration_s": Int(elapsed), "speech_model": "parakeet-tdt-0.6b-v2",
                                    "privateMode": privateModeAtStart]
         if !attendeeNames.isEmpty { meta["attendees"] = attendeeNames }
+        if !attendeeEmails.isEmpty { meta["attendee_emails"] = attendeeEmails }
         do {
             if ModelManager.shared.manages(model) { status = "Loading the notes model…" }
             try await ModelManager.shared.ensure(model)
@@ -463,6 +467,7 @@ public final class Recorder: ObservableObject {
         if notes != nil, Prefs.shared.askFeedback { feedbackFor = savedFolder }
         reloadMeetings()
         isWriting = false
+        if notes != nil, let folder = savedFolder { InferoidExtensions.meetingSaved(folder: folder) }
         // Feed the Brain after the notes are on screen, reusing the notes model while it is still loaded.
         if let folder = savedFolder, let brain = try? BrainStore() {
             let model = model

@@ -215,6 +215,7 @@ public final class ChatStore: ObservableObject {
     func send(_ text: String, in id: UUID, model: String, meetings: [Meeting], projects: [Project] = [], project: Project? = nil, person: String? = nil) {
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, busyThread == nil, let before = thread(id) else { return }
+        if let lock = InferoidExtensions.lock { error = lock.message; return }
         error = nil
         if id == AssistantIntro.threadID, !profile.isOnboarded { answerIntro(question, in: id, meetings: meetings); return }
         if profile.isOnboarded, let emoji = AssistantIntro.emojiPreference(in: question) { profile.useEmoji = emoji; profile.save() }
